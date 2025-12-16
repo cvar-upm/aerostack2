@@ -1,0 +1,8 @@
+# SERVICE TYPE: SetImagePath
+# ------------------------------------------------------------------------------
+# This service receives a transform to add it to the tf tree as static transform
+
+string path                         # String path to images folder
+---
+bool success                        # whether the path has been set correctly or not
+# ------------------------------------------------------------------------------
