@@ -189,11 +189,22 @@ void Plugin::onSetup()
         "  [%s] rigid_body_name: %s", topic_id.c_str(), config.rigid_body_name.c_str());
     }
 
+    auto require3 = [&](const std::vector<double> & v, const std::string & param_name) {
+      if (v.size() != 3) {
+        throw std::runtime_error(
+          "Parameter '" + param_name + "' must be a list of 3 doubles, got " +
+          std::to_string(v.size()) +
+          " element(s). Check your YAML config.");
+      }
+    };
+
     if (config.use_message_covariance) {
       std::vector<double> pos_mult;
       std::vector<double> ori_mult;
       node_ptr_->get_parameter(prefix + ".position_multiplier", pos_mult);
       node_ptr_->get_parameter(prefix + ".orientation_multiplier", ori_mult);
+      if (pos_mult.size() != 3) {pos_mult = {1.0, 1.0, 1.0};}
+      if (ori_mult.size() != 3) {ori_mult = {1.0, 1.0, 1.0};}
       std::copy_n(pos_mult.begin(), 3, config.position_values.begin());
       std::copy_n(ori_mult.begin(), 3, config.orientation_values.begin());
 
@@ -210,6 +221,8 @@ void Plugin::onSetup()
       std::vector<double> ori_cov;
       node_ptr_->get_parameter(prefix + ".position_covariance", pos_cov);
       node_ptr_->get_parameter(prefix + ".orientation_covariance", ori_cov);
+      require3(pos_cov, prefix + ".position_covariance");
+      require3(ori_cov, prefix + ".orientation_covariance");
       std::copy_n(pos_cov.begin(), 3, config.position_values.begin());
       std::copy_n(ori_cov.begin(), 3, config.orientation_values.begin());
 
