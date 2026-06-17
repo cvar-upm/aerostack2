@@ -66,6 +66,7 @@
 #include <ekf/ekf_wrapper.hpp>
 
 #include "simple_ekf/simple_ekf_utils.hpp"
+#include "simple_ekf/ekf_history_buffer.hpp"
 
 
 namespace simple_ekf
@@ -107,11 +108,23 @@ class Plugin : public as2_state_estimator_plugin_base::StateEstimatorBase
   // Whether the drone is currently in offboard mode
   bool drone_offboard_ = false;
 
+  // Whether the drone has ever entered offboard mode. Used to ensure the
+  // pre-flight zero-pose correction in timerCallback() only runs before the
+  // drone's first takeoff, and never again after landing.
+  bool drone_has_been_offboard_ = false;
+
   // Last mocap pose per rigid body name — used for isSamePose duplicate detection
   std::map<std::string, tf2::Vector3> last_mocap_pose_;
 
+  // Last processed message timestamp per update topic — used for update_rate_hz throttling
+  std::map<std::string, rclcpp::Time> last_update_stamp_;
+
   // EKF wrapper
   ekf::EKFWrapper ekf_wrapper_;
+
+  // Out-of-sequence measurement handling
+  double max_update_latency_ms_ = 1000.0;
+  std::unique_ptr<EkfHistoryBuffer> ekf_history_buffer_;
 
 public:
   Plugin()
@@ -173,6 +186,21 @@ private:
   void processPose(const geometry_msgs::msg::PoseWithCovarianceStamped & msg, bool is_odom = false);
 
   /**
+   * @brief Check whether an update message should be dropped to enforce `config.update_rate_hz`
+   *
+   * Tracks the timestamp of the last processed message per topic (config.topic). The
+   * first message for a given topic is always processed. If `config.update_rate_hz <= 0`,
+   * this never throttles.
+   *
+   * @param config Topic configuration providing `topic` and `update_rate_hz`
+   * @param stamp Header timestamp of the incoming message
+   * @return true if the message should be dropped (rate limit not yet elapsed)
+   */
+  bool shouldThrottleUpdate(
+    const PoseTopicConfig & config,
+    const builtin_interfaces::msg::Time & stamp);
+
+  /**
    * @brief Callback for IMU topic subscription
    *
    * @param msg IMU message from topic
@@ -210,7 +238,8 @@ private:
   /**
    * @brief Callback for platform info topic subscription
    *
-   * Reads the offboard flag from the message and updates drone_offboard_.
+   * Reads the offboard flag from the message and updates drone_offboard_ and
+   * drone_has_been_offboard_.
    *
    * @param msg PlatformInfo message from topic
    */

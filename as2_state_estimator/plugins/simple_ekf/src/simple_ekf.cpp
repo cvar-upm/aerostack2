@@ -110,6 +110,10 @@ void Plugin::onSetup()
   // Setup EKF wrapper (initial covariance, gravity, IMU noise)
   setupWrapper();
 
+  // Out-of-sequence measurement handling: history buffer for rewind + replay
+  max_update_latency_ms_ = getParameter<double>(node_ptr_, "simple_ekf.max_update_latency_ms");
+  ekf_history_buffer_ = std::make_unique<EkfHistoryBuffer>(ekf_wrapper_, max_update_latency_ms_);
+
   // Whether to publish the earth→map transform as tf_static (true) or dynamic tf (false)
   earth_to_map_static_tf_ = getParameter<bool>(
     node_ptr_, "simple_ekf.earth_map_transform.static_tf");
@@ -159,6 +163,17 @@ void Plugin::onSetup()
     RCLCPP_INFO(node_ptr_->get_logger(), "  - %s", id.c_str());
   }
 
+  // Read a vector<double> parameter, declaring it with a default value if not already present.
+  auto getVectorParamOrDefault = [this](
+    const std::string & param_name, const std::vector<double> & default_value) {
+      if (!node_ptr_->has_parameter(param_name)) {
+        return node_ptr_->declare_parameter<std::vector<double>>(param_name, default_value);
+      }
+      std::vector<double> value;
+      node_ptr_->get_parameter(param_name, value);
+      return value;
+    };
+
   for (const auto & topic_id : topic_ids) {
     PoseTopicConfig config;
     std::string prefix = "simple_ekf." + topic_id;
@@ -168,6 +183,19 @@ void Plugin::onSetup()
     config.set_earth_map = getParameter<bool>(node_ptr_, prefix + ".set_earth_map");
     config.use_message_covariance = getParameter<bool>(
       node_ptr_, prefix + ".use_message_covariance");
+
+    // Optional: cap how often this topic's messages are fed to the EKF (0 = no limit)
+    const std::string update_rate_param = prefix + ".update_rate_hz";
+    if (!node_ptr_->has_parameter(update_rate_param)) {
+      config.update_rate_hz = node_ptr_->declare_parameter<double>(update_rate_param, 0.0);
+    } else {
+      node_ptr_->get_parameter(update_rate_param, config.update_rate_hz);
+    }
+    if (config.update_rate_hz > 0.0) {
+      RCLCPP_INFO(
+        node_ptr_->get_logger(),
+        "  [%s] update_rate_hz: %.3f", topic_id.c_str(), config.update_rate_hz);
+    }
 
     // Read rigid_body_name for mocap topics (ignored for other types)
     if (config.type == "mocap4r2_msgs/msg/RigidBodies") {
@@ -190,13 +218,13 @@ void Plugin::onSetup()
     }
 
     auto require3 = [&](const std::vector<double> & v, const std::string & param_name) {
-      if (v.size() != 3) {
-        throw std::runtime_error(
-          "Parameter '" + param_name + "' must be a list of 3 doubles, got " +
-          std::to_string(v.size()) +
-          " element(s). Check your YAML config.");
-      }
-    };
+        if (v.size() != 3) {
+          throw std::runtime_error(
+                  "Parameter '" + param_name + "' must be a list of 3 doubles, got " +
+                  std::to_string(v.size()) +
+                  " element(s). Check your YAML config.");
+        }
+      };
 
     if (config.use_message_covariance) {
       std::vector<double> pos_mult;
@@ -406,8 +434,9 @@ void Plugin::processImu(const sensor_msgs::msg::Imu & msg)
     }
   }
 
-  // Perform EKF prediction step
-  ekf_wrapper_.predict(input, dt);
+  // Perform EKF prediction step, recording it in the history buffer for
+  // possible future out-of-sequence-measurement replay.
+  ekf_history_buffer_->predictAndRecord(rclcpp::Time(msg.header.stamp), input, dt);
 
   if (debug_verbose_) {
     RCLCPP_INFO(
@@ -420,11 +449,6 @@ void Plugin::processImu(const sensor_msgs::msg::Imu & msg)
 
 void Plugin::processPose(const geometry_msgs::msg::PoseWithCovarianceStamped & msg, bool is_odom)
 {
-  // TODO(user): Implement EKF update step with pose measurement
-  // This should:
-  // 1. Convert PoseWithCovarianceStamped to ekf::PoseMeasurement
-  // 2. Call ekf_wrapper_.update() with the measurement
-  // 3. Update the state from EKF
   if (debug_verbose_) {
     RCLCPP_WARN(
       node_ptr_->get_logger(),
@@ -435,6 +459,9 @@ void Plugin::processPose(const geometry_msgs::msg::PoseWithCovarianceStamped & m
   // Get the current (freshly predicted) EKF state and build the transforms from it,
   // instead of using the stale last-published map_to_odom_ * odom_to_baselink_ product.
   // This avoids frame-transform inconsistencies when a pose update arrives between IMU callbacks.
+  // Note: the spatial frame transform always uses "now"'s map_to_odom_/state, even for
+  // delayed measurements — only the EKF numerical correction is replayed at the
+  // measurement's timestamp, not this transform.
   ekf::State current_state = ekf_wrapper_.get_state();
   StateTransforms transforms(current_state, map_to_odom_);
 
@@ -448,24 +475,24 @@ void Plugin::processPose(const geometry_msgs::msg::PoseWithCovarianceStamped & m
       "Transformed pose measurement to map frame for EKF update");
   }
 
-  // Convert to EKF measurement format, passing the current state so that the measured
-  // Euler angles are unwrapped relative to the state angles (Fix 1: angle unwrapping).
-  ekf::PoseMeasurement measurement = poseWithCovarianceToEkfMeasurement(
-    measurement_in_map, current_state);
+  // Extract the raw (wrapped, [-pi,pi]) measurement in map frame. Angle unwrapping is
+  // performed by the history buffer relative to the EKF state at the measurement's
+  // timestamp, which may differ from current_state for delayed measurements.
+  ekf::PoseMeasurement raw_measurement = poseWithCovarianceToRawEkfMeasurement(measurement_in_map);
   ekf::PoseMeasurementCovariance measurement_cov = poseWithCovarianceToEkfMeasurementCovariance(
     measurement_in_map.pose);
 
   if (debug_verbose_) {
     RCLCPP_INFO(
       node_ptr_->get_logger(),
-      "Converted pose measurement to EKF format:"
+      "Raw pose measurement (map frame, wrapped):"
       "[x=%.3f, y=%.3f, z=%.3f, roll=%.3f, pitch=%.3f, yaw=%.3f]",
-      measurement.data[ekf::PoseMeasurement::X],
-      measurement.data[ekf::PoseMeasurement::Y],
-      measurement.data[ekf::PoseMeasurement::Z],
-      measurement.data[ekf::PoseMeasurement::ROLL],
-      measurement.data[ekf::PoseMeasurement::PITCH],
-      measurement.data[ekf::PoseMeasurement::YAW]);
+      raw_measurement.data[ekf::PoseMeasurement::X],
+      raw_measurement.data[ekf::PoseMeasurement::Y],
+      raw_measurement.data[ekf::PoseMeasurement::Z],
+      raw_measurement.data[ekf::PoseMeasurement::ROLL],
+      raw_measurement.data[ekf::PoseMeasurement::PITCH],
+      raw_measurement.data[ekf::PoseMeasurement::YAW]);
     RCLCPP_INFO(
       node_ptr_->get_logger(),
       "Pose measurement covariance:"
@@ -478,12 +505,44 @@ void Plugin::processPose(const geometry_msgs::msg::PoseWithCovarianceStamped & m
       measurement_cov.data[ekf::PoseMeasurementCovariance::YAW]);
   }
 
-  // Perform EKF update step
-  if (!is_odom) {
-    ekf_wrapper_.update_pose(measurement, measurement_cov);
-  } else {
-    ekf_wrapper_.update_pose_odom(measurement, measurement_cov);
+  // Perform EKF update step, handling out-of-sequence (delayed) measurements via
+  // rewind + replay in the history buffer.
+  EkfOperationType type = is_odom ?
+    EkfOperationType::UPDATE_POSE_ODOM : EkfOperationType::UPDATE_POSE;
+
+  rclcpp::Time now = node_ptr_->now();
+  UpdateResult result = ekf_history_buffer_->updateAndRecord(
+    rclcpp::Time(msg.header.stamp), type, raw_measurement, measurement_cov, now);
+
+  if (!result.applied) {
+    RCLCPP_WARN_THROTTLE(
+      node_ptr_->get_logger(), *node_ptr_->get_clock(), 1000,
+      "Dropping pose measurement (age %.3f s exceeds max_update_latency=%.0f ms)",
+      (now - rclcpp::Time(msg.header.stamp)).seconds(), max_update_latency_ms_);
   }
+}
+
+bool Plugin::shouldThrottleUpdate(
+  const PoseTopicConfig & config,
+  const builtin_interfaces::msg::Time & stamp)
+{
+  if (config.update_rate_hz <= 0.0) {
+    return false;
+  }
+
+  rclcpp::Time msg_time(stamp);
+  auto it = last_update_stamp_.find(config.topic);
+  if (it == last_update_stamp_.end()) {
+    last_update_stamp_.emplace(config.topic, msg_time);
+    return false;
+  }
+
+  if ((msg_time - it->second).seconds() < 1.0 / config.update_rate_hz) {
+    return true;
+  }
+
+  it->second = msg_time;
+  return false;
 }
 
 void Plugin::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
@@ -529,9 +588,12 @@ void Plugin::platformInfoCallback(const as2_msgs::msg::PlatformInfo::SharedPtr m
 {
   if (use_arm_) {
     drone_offboard_ = msg->armed;
-    return;
+  } else {
+    drone_offboard_ = msg->offboard;
   }
-  drone_offboard_ = msg->offboard;
+  if (drone_offboard_) {
+    drone_has_been_offboard_ = true;
+  }
 }
 
 void Plugin::timerCallback()
@@ -542,24 +604,25 @@ void Plugin::timerCallback()
       earth_to_map_, node_ptr_->now(), false);
   }
 
-  // TODO(rdasilva01): Offboard check. If false, update with 0 0 0. If true, do nothing.
-  if (earth_to_map_set_) {
-    if (!drone_offboard_) {
-      geometry_msgs::msg::PoseWithCovarianceStamped zero_pose;
-      zero_pose.header.stamp = node_ptr_->now();
-      zero_pose.pose.pose.position.x = 0.0;
-      zero_pose.pose.pose.position.y = 0.0;
-      zero_pose.pose.pose.position.z = 0.0;
-      zero_pose.pose.pose.orientation = tf2::toMsg(tf2::Quaternion(0, 0, 0, 1));
-      zero_pose.pose.covariance.fill(1e-5);  // Very low covariance to trust this measurement
-      processPose(zero_pose);
-      updateStateFromEkf();
-      publishState();
-      if (debug_verbose_) {
-        RCLCPP_WARN(
-          node_ptr_->get_logger(),
-          "Offboard is false, updated EKF with zero pose measurement");
-      }
+  // Before the drone's first offboard activation, continuously correct the EKF
+  // state to (0,0,0) since the drone is known to be stationary at its origin.
+  // Once it has been offboard at least once, never apply this correction again,
+  // even if offboard is later disabled (e.g. after landing).
+  if (earth_to_map_set_ && !drone_offboard_ && !drone_has_been_offboard_) {
+    geometry_msgs::msg::PoseWithCovarianceStamped zero_pose;
+    zero_pose.header.stamp = node_ptr_->now();
+    zero_pose.pose.pose.position.x = 0.0;
+    zero_pose.pose.pose.position.y = 0.0;
+    zero_pose.pose.pose.position.z = 0.0;
+    zero_pose.pose.pose.orientation = tf2::toMsg(tf2::Quaternion(0, 0, 0, 1));
+    zero_pose.pose.covariance.fill(1e-5);  // Very low covariance to trust this measurement
+    processPose(zero_pose);
+    updateStateFromEkf();
+    publishState();
+    if (debug_verbose_) {
+      RCLCPP_WARN(
+        node_ptr_->get_logger(),
+        "Offboard is false, updated EKF with zero pose measurement");
     }
   }
 }
@@ -603,6 +666,10 @@ void Plugin::poseCallback(
   const geometry_msgs::msg::PoseStamped::SharedPtr msg,
   const PoseTopicConfig & config)
 {
+  if (shouldThrottleUpdate(config, msg->header.stamp)) {
+    return;
+  }
+
   if (earth_to_map_set_) {
     geometry_msgs::msg::PoseWithCovarianceStamped pose_msg;
     pose_msg.header = msg->header;
@@ -695,6 +762,10 @@ void Plugin::poseWithCovarianceCallback(
   const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg,
   const PoseTopicConfig & config)
 {
+  if (shouldThrottleUpdate(config, msg->header.stamp)) {
+    return;
+  }
+
   if (earth_to_map_set_) {
     geometry_msgs::msg::PoseWithCovarianceStamped pose_msg = *msg;
 
@@ -733,6 +804,10 @@ void Plugin::odometryCallback(
   const nav_msgs::msg::Odometry::SharedPtr msg,
   const PoseTopicConfig & config)
 {
+  if (shouldThrottleUpdate(config, msg->header.stamp)) {
+    return;
+  }
+
   // Reuse the PoseWithCovarianceStamped path: extract the pose part from the odometry
   // message (ignoring twist) and forward it. The child_frame_id of the odometry becomes
   // the frame_id of the pose so that transformPoseToMapFrame picks the right transform.
@@ -780,6 +855,10 @@ void Plugin::mocapCallback(
   for (const auto & rigid_body : msg->rigidbodies) {
     if (rigid_body.rigid_body_name != config.rigid_body_name) {
       continue;
+    }
+
+    if (shouldThrottleUpdate(config, msg->header.stamp)) {
+      return;
     }
 
     // Skip all-zero poses: the mocap system publishes zeros when the body is not detected
