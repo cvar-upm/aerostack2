@@ -227,12 +227,10 @@ void Plugin::onSetup()
       };
 
     if (config.use_message_covariance) {
-      std::vector<double> pos_mult;
-      std::vector<double> ori_mult;
-      node_ptr_->get_parameter(prefix + ".position_multiplier", pos_mult);
-      node_ptr_->get_parameter(prefix + ".orientation_multiplier", ori_mult);
-      if (pos_mult.size() != 3) {pos_mult = {1.0, 1.0, 1.0};}
-      if (ori_mult.size() != 3) {ori_mult = {1.0, 1.0, 1.0};}
+      std::vector<double> pos_mult = getVectorParamOrDefault(
+        prefix + ".position_multiplier", {1.0, 1.0, 1.0});
+      std::vector<double> ori_mult = getVectorParamOrDefault(
+        prefix + ".orientation_multiplier", {1.0, 1.0, 1.0});
       std::copy_n(pos_mult.begin(), 3, config.position_values.begin());
       std::copy_n(ori_mult.begin(), 3, config.orientation_values.begin());
 
@@ -245,12 +243,10 @@ void Plugin::onSetup()
         "  [%s] orientation_multiplier: [%.3f, %.3f, %.3f]",
         topic_id.c_str(), ori_mult[0], ori_mult[1], ori_mult[2]);
     } else {
-      std::vector<double> pos_cov;
-      std::vector<double> ori_cov;
-      node_ptr_->get_parameter(prefix + ".position_covariance", pos_cov);
-      node_ptr_->get_parameter(prefix + ".orientation_covariance", ori_cov);
-      require3(pos_cov, prefix + ".position_covariance");
-      require3(ori_cov, prefix + ".orientation_covariance");
+      std::vector<double> pos_cov = getVectorParamOrDefault(
+        prefix + ".position_covariance", {1e-4, 1e-4, 1e-4});
+      std::vector<double> ori_cov = getVectorParamOrDefault(
+        prefix + ".orientation_covariance", {1e-5, 1e-5, 1e-5});
       std::copy_n(pos_cov.begin(), 3, config.position_values.begin());
       std::copy_n(ori_cov.begin(), 3, config.orientation_values.begin());
 
