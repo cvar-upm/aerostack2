@@ -14,4 +14,9 @@
       <description>State estimator plugin for simple EKF-based state estimation.</description>
     </class>
   </library>
+  <library path="calib_ekf">
+    <class type="calib_ekf::Plugin" base_class_type="as2_state_estimator_plugin_base::StateEstimatorBase">
+      <description>State estimator plugin for EKF-based state estimation with online camera extrinsic/intrinsic calibration.</description>
+    </class>
+  </library>
 </class_libraries>

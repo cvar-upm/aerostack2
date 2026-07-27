@@ -112,6 +112,7 @@ set(PLUGIN_LIST
   # ground_truth_odometry_fuse
   # ekf_fuse
   simple_ekf
+  calib_ekf
 )
 
 foreach(PLUGIN ${PLUGIN_LIST})
