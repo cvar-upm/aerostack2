@@ -202,12 +202,13 @@ void StateEstimator::receiveStateUpdate(
   if (!assertPublish(authority, type)) {
     return;
   }
+  received_[static_cast<int>(type)] = true;
   auto & plugin = plugins_[authority];
   auto & p_robot_state = plugin->robot_state_;
 
   if (type == TransformInformatonType::TWIST_IN_BASE) {
     robot_state_.twist = p_robot_state.twist;
-    if (publish_timer_) {return;}
+    if (publish_timer_ || !isStateComplete()) {return;}
     twist_pub_->publish(robot_state_.getTwistStampedInBase());
     pose_pub_->publish(robot_state_.getPoseStampedEarthToBase());
     return;
@@ -229,11 +230,21 @@ void StateEstimator::publishStateTimerCallback()
       static_cast<TransformInformatonType>(i));
     publishTransform(transform, is_static);
   }
-  if (authorithed_plugins_[static_cast<int>(TransformInformatonType::TWIST_IN_BASE)].empty()) {
+  if (authorithed_plugins_[static_cast<int>(TransformInformatonType::TWIST_IN_BASE)].empty() ||
+    !isStateComplete())
+  {
     return;
   }
   twist_pub_->publish(robot_state_.getTwistStampedInBase());
   pose_pub_->publish(robot_state_.getPoseStampedEarthToBase());
+}
+
+bool StateEstimator::isStateComplete() const
+{
+  for (int i = 0; i < 4; i++) {
+    if (!authorithed_plugins_[i].empty() && !received_[i]) {return false;}
+  }
+  return true;
 }
 
 

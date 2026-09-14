@@ -233,6 +233,18 @@ private:
    */
   void publishStateTimerCallback();
 
+  /**
+   * @brief Whether every link claimed by a plugin, and the twist, has been received once.
+   *
+   * self_localization composes the three links, so before then it would report the identity
+   * stand-in of a link nobody has set as the robot's pose.
+   *
+   * @return true once no claimed link is still missing.
+   */
+  bool isStateComplete() const;
+
+  std::array<bool, 4> received_{};  // links and twist received from an authorized plugin
+
   static RobotState robot_state_;
 
   /**
