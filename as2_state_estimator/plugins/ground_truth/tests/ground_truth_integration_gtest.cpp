@@ -1079,6 +1079,57 @@ TEST(GroundTruthIntegrationTest, ManualEarthToMap_UsesConfiguredTransform)
   EXPECT_NEAR(earth_to_base.transform.translation.z, 3.0, 1e-6);
 }
 
+// Until the plugin has set every link of the tree, self_localization would compose identity
+// stand-ins into a pose at the earth origin, so a twist alone publishes nothing.
+TEST(GroundTruthIntegrationTest, SelfLocalizationWaitsForTheFullTree)
+{
+  const std::string ns = "gt_selfloc_waits_for_tree";
+  auto node = getGroundTruthNode(ns, {"ground_truth.twist_sub_topic:=ground_truth/twist"});
+  auto pub_node = rclcpp::Node::make_shared(ns + "_pub");
+  auto pose_pub = pub_node->create_publisher<geometry_msgs::msg::PoseStamped>(
+    "/" + ns + "/ground_truth/pose", rclcpp::SensorDataQoS());
+  auto twist_pub = pub_node->create_publisher<geometry_msgs::msg::TwistStamped>(
+    "/" + ns + "/ground_truth/twist", rclcpp::SensorDataQoS());
+
+  auto sub_node = rclcpp::Node::make_shared(ns + "_sub");
+  int pose_count = 0;
+  auto pose_sub = sub_node->create_subscription<geometry_msgs::msg::PoseStamped>(
+    "/" + ns + "/self_localization/pose", 10,
+    [&pose_count](geometry_msgs::msg::PoseStamped::SharedPtr) {++pose_count;});
+
+  rclcpp::executors::MultiThreadedExecutor exec;
+  exec.add_node(node);
+  exec.add_node(pub_node);
+  exec.add_node(sub_node);
+  // Give the StateEstimator's 1s deferred setup() timer time to fire (plugin subscriptions
+  // aren't created until then) before publishing anything.
+  spinSome(exec, 30);
+
+  geometry_msgs::msg::TwistStamped twist;
+  twist.header.frame_id = ns + "/base_link";
+  twist.twist.linear.x = 1.0;
+  for (int i = 0; i < 10; ++i) {
+    twist.header.stamp = pub_node->now();
+    twist_pub->publish(twist);
+    spinSome(exec, 1);
+  }
+
+  EXPECT_EQ(pose_count, 0) << "self_localization was published before the tree was set";
+
+  for (int i = 0; i < 20 && pose_count == 0; ++i) {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.header.frame_id = "earth";
+    pose.header.stamp = pub_node->now();
+    pose.pose.orientation.w = 1.0;
+    pose_pub->publish(pose);
+    twist.header.stamp = pub_node->now();
+    twist_pub->publish(twist);
+    spinSome(exec, 2);
+  }
+
+  EXPECT_GT(pose_count, 0) << "self_localization should be published once the tree is set";
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
