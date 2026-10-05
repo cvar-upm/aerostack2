@@ -65,14 +65,31 @@ UsbCameraInterface::UsbCameraInterface(as2::Node * node_ptr)
     node_ptr_->getParameter<int>("output_queue_size", 1);
   output_queue_.setMaxSize(output_queue_size > 0 ? static_cast<size_t>(output_queue_size) : 1);
 
-  const int64_t milliseconds_from_framerate =
-    static_cast<int64_t>(1000.0 / framerate_);
-  capture_callback_group_ = node_ptr_->create_callback_group(
-    rclcpp::CallbackGroupType::MutuallyExclusive);
-  image_capture_timer_ = node_ptr_->create_timer(
-    std::chrono::milliseconds(milliseconds_from_framerate),
-    std::bind(&UsbCameraInterface::captureImage, this),
-    capture_callback_group_);
+  // Do not poll on a timer derived from framerate_: the requested and the real
+  // sensor rate can differ (and 1000 / fps truncates to whole ms), which made
+  // the timer drop frames. cap_.read() blocks until the next frame instead.
+  if (!cap_.isOpened()) {
+    RCLCPP_ERROR(node_ptr_->get_logger(), "Camera not opened, capture thread not started");
+    return;
+  }
+  capture_running_ = true;
+  capture_thread_ = std::thread(&UsbCameraInterface::captureLoop, this);
+}
+
+UsbCameraInterface::~UsbCameraInterface()
+{
+  capture_running_ = false;
+  if (capture_thread_.joinable()) {
+    capture_thread_.join();
+  }
+  cap_.release();
+}
+
+void UsbCameraInterface::captureLoop()
+{
+  while (capture_running_ && rclcpp::ok()) {
+    captureImage();
+  }
 }
 
 void UsbCameraInterface::setupCamera()
@@ -198,7 +215,10 @@ void UsbCameraInterface::captureImage()
 {
   cv::Mat frame;
   if (!cap_.read(frame)) {
-    RCLCPP_ERROR(node_ptr_->get_logger(), "Cannot read image");
+    RCLCPP_ERROR_THROTTLE(
+      node_ptr_->get_logger(), *node_ptr_->get_clock(), 1000, "Cannot read image");
+    // Avoid a busy loop while the device is not delivering frames
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
     return;
   }
 

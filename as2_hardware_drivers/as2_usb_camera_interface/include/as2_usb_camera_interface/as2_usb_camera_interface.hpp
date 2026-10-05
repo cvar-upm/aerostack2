@@ -48,9 +48,11 @@
 
 #include <cstring>
 #include <array>
+#include <atomic>
 #include <vector>
 #include <memory>
 #include <string>
+#include <thread>
 
 #include <rclcpp/rclcpp.hpp>
 #include "as2_core/custom/cv_bridge.hpp"
@@ -86,15 +88,15 @@ public:
   /**
    * @brief Construct a new UsbCameraInterface object bound to an existing node.
    *
-   * @param node_ptr Node used to read parameters, create the capture timer and
-   *                 publish the image / camera_info / TF.
+   * @param node_ptr Node used to read parameters and publish the
+   *                 image / camera_info / TF.
    */
   explicit UsbCameraInterface(as2::Node * node_ptr);
 
   /**
-   * @brief Destroy the UsbCameraInterface object
+   * @brief Destroy the UsbCameraInterface object, stopping the capture thread
    */
-  ~UsbCameraInterface() = default;
+  ~UsbCameraInterface();
 
   /**
    * @brief Get the latest known camera info (intrinsics, distortion, ...).
@@ -110,8 +112,10 @@ private:
   as2::Node * node_ptr_;
   std::shared_ptr<as2::sensors::Camera> camera_;
   cv::VideoCapture cap_;
-  rclcpp::TimerBase::SharedPtr image_capture_timer_;
-  rclcpp::CallbackGroup::SharedPtr capture_callback_group_;
+  // Capture runs in its own thread, paced by the blocking cap_.read(), so the
+  // publish rate follows the sensor instead of a timer derived from framerate_.
+  std::thread capture_thread_;
+  std::atomic<bool> capture_running_{false};
 
   as2_usb_camera_interface::MutexQueue<CameraFrame> output_queue_{1};
   sensor_msgs::msg::CameraInfo camera_info_;
@@ -120,6 +124,7 @@ private:
   double framerate_{30.0};
   bool publish_images_{true};
 
+  void captureLoop();
   void captureImage();
   void setupCamera();
   void cameraInfoSetup();
