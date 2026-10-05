@@ -57,6 +57,7 @@ jobs:
             as2_visualization
             as2_external_object_to_tf
             as2_geozones
+            as2_safety_monitor
           target-ros2-distro: jazzy
           colcon-defaults: |
             {
