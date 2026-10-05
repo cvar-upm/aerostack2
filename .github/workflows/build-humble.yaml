@@ -64,6 +64,7 @@ jobs:
             as2_python_api
             as2_realsense_interface
             as2_rviz_plugins
+            as2_safety_monitor
             as2_state_estimator
             as2_usb_camera_interface
             as2_visualization

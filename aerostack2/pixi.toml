@@ -33,6 +33,7 @@ extra-package-mappings = [{
   as2_python_api = { conda = [] },
   as2_realsense_interface = { conda = [] },
   as2_rviz_plugins = { conda = [] },
+  as2_safety_monitor = { conda = [] },
   as2_state_estimator = { conda = [] },
   as2_usb_camera_interface = { conda = [] },
   as2_visualization = { conda = [] },
@@ -65,6 +66,7 @@ as2_platform_multirotor_simulator = { path = "../as2_aerial_platforms/as2_platfo
 as2_python_api = { path = "../as2_python_api" }
 as2_realsense_interface = { path = "../as2_hardware_drivers/as2_realsense_interface" }
 as2_rviz_plugins = { path = "../as2_user_interfaces/as2_visualization/as2_rviz_plugins" }
+as2_safety_monitor = { path = "../as2_utilities/as2_safety_monitor" }
 as2_state_estimator = { path = "../as2_state_estimator" }
 as2_usb_camera_interface = { path = "../as2_hardware_drivers/as2_usb_camera_interface" }
 as2_visualization = { path = "../as2_user_interfaces/as2_visualization/as2_visualization" }

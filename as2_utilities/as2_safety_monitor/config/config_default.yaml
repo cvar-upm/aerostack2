@@ -1,0 +1,21 @@
+/**:
+  ros__parameters:
+    battery:
+      enabled: false  # Run this check
+      topic: "sensor_measurements/battery"  # sensor_msgs/BatteryState, relative to the namespace
+      alert: 2  # AlertEvent code, published once per violation episode
+      description: "Battery voltage low"  # AlertEvent description
+      seconds: 5.0  # Time below the threshold before the alert (s), 0 = instant
+      frequency: 10.0  # Evaluation rate of the last message (Hz)
+      voltage_threshold: 21.0  # Pack voltage (V), 3.5 V per cell on a 6S pack
+    geocage:
+      enabled: false  # Run this check
+      topic: "self_localization/pose"  # geometry_msgs/PoseStamped, relative to the namespace
+      alert: 1  # AlertEvent code, published once per violation episode
+      description: "Out of the geocage"  # AlertEvent description
+      seconds: 0.0  # Time outside before the alert (s), 0 = instant
+      frequency: 20.0  # Evaluation rate of the last message (Hz)
+      frame_id: "/earth"  # "/earth" is global, "map" becomes "<namespace>/map"
+      polygon: "[[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]]"  # [x, y] vertices in order (m), quoted for rcl
+      z_min: -1.0  # Lower height limit (m)
+      z_max: 3.0  # Upper height limit (m)
