@@ -90,6 +90,8 @@ private:
   rclcpp::TimerBase::SharedPtr platform_info_timer_;
   as2::PlatformStateMachine state_machine_;
   std::vector<uint8_t> available_control_modes_;
+  // The alert that put the platform in EMERGENCY, which sendCommand() keeps answering.
+  int8_t emergency_alert_ = 0;
 
   // Frames the commands must be expressed in for the current control mode, as
   // declared by the platform. Empty means not declared by the platform yet.
@@ -202,6 +204,14 @@ public:
    * the platform will stop hearing commands from AS2. USE WITH CAUTION.
    */
   virtual void ownStopPlatform() = 0;
+
+  /**
+   * @brief Handles the platform emergency land command: stop as in ownStopPlatform(), then
+   * descend where the platform stopped and land. Like the emergency stop it is called on every
+   * command tick while in emergency, and the platform stops hearing commands from AS2.
+   * Platforms that do not implement it only stop. USE WITH CAUTION.
+   */
+  virtual void ownEmergencyLand();
 
 protected:
   /**

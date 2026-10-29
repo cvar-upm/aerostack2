@@ -337,6 +337,14 @@ bool AerialPlatform::land()
   return false;
 }
 
+void AerialPlatform::ownEmergencyLand()
+{
+  RCLCPP_WARN_THROTTLE(
+    this->get_logger(), *this->get_clock(), 1000,
+    "Emergency land is not implemented by this platform: stopping instead");
+  ownStopPlatform();
+}
+
 void AerialPlatform::alertEvent(const as2_msgs::msg::AlertEvent & msg)
 {
   if (msg.alert > 0) {
@@ -354,7 +362,14 @@ void AerialPlatform::alertEvent(const as2_msgs::msg::AlertEvent & msg)
     case as2_msgs::msg::AlertEvent::EMERGENCY_HOVER: {
         state_machine_.processEvent(as2_msgs::msg::PlatformStateMachineEvent::EMERGENCY);
         RCLCPP_WARN(this->get_logger(), "EMERGENCY HOVER ACTIVATED");
+        emergency_alert_ = msg.alert;
         ownStopPlatform();
+      } break;
+    case as2_msgs::msg::AlertEvent::EMERGENCY_LAND: {
+        state_machine_.processEvent(as2_msgs::msg::PlatformStateMachineEvent::EMERGENCY);
+        RCLCPP_WARN(this->get_logger(), "EMERGENCY LAND ACTIVATED");
+        emergency_alert_ = msg.alert;
+        ownEmergencyLand();
       } break;
     default:
       break;
@@ -381,8 +396,13 @@ void AerialPlatform::sendCommand()
   }
 
   if (state_machine_.getState().state == as2_msgs::msg::PlatformStatus::EMERGENCY) {
-    RCLCPP_WARN_THROTTLE(this->get_logger(), clk, 1000, "SEND PLATFORM STOP COMMAND");
-    ownStopPlatform();
+    if (emergency_alert_ == as2_msgs::msg::AlertEvent::EMERGENCY_LAND) {
+      RCLCPP_WARN_THROTTLE(this->get_logger(), clk, 1000, "SEND PLATFORM EMERGENCY LAND COMMAND");
+      ownEmergencyLand();
+    } else {
+      RCLCPP_WARN_THROTTLE(this->get_logger(), clk, 1000, "SEND PLATFORM STOP COMMAND");
+      ownStopPlatform();
+    }
   } else if (has_new_references_) {
     // Zero timeout: use the latest cached transform, never block the command timer
     if (!as2::control_mode::convertCommandsToFrame(
