@@ -52,27 +52,32 @@ std::string format_values(
 
 /**
  * @brief Filter state: position, velocity and orientation in the map frame, and IMU biases
+ *
+ * The orientation is the base->map quaternion, w first. The filter renormalizes it after
+ * every step; nothing projects the covariance to match.
  */
 struct State
 {
-  static constexpr std::size_t size = 15;
+  static constexpr std::size_t size = 16;
   static constexpr int X = 0;
   static constexpr int Y = 1;
   static constexpr int Z = 2;
   static constexpr int VX = 3;
   static constexpr int VY = 4;
   static constexpr int VZ = 5;
-  static constexpr int ROLL = 6;
-  static constexpr int PITCH = 7;
-  static constexpr int YAW = 8;
-  static constexpr int ABX = 9;
-  static constexpr int ABY = 10;
-  static constexpr int ABZ = 11;
-  static constexpr int WBX = 12;
-  static constexpr int WBY = 13;
-  static constexpr int WBZ = 14;
+  static constexpr int QW = 6;
+  static constexpr int QX = 7;
+  static constexpr int QY = 8;
+  static constexpr int QZ = 9;
+  static constexpr int ABX = 10;
+  static constexpr int ABY = 11;
+  static constexpr int ABZ = 12;
+  static constexpr int WBX = 13;
+  static constexpr int WBY = 14;
+  static constexpr int WBZ = 15;
 
-  std::array<double, size> data{};
+  // The identity orientation, not a zero quaternion
+  std::array<double, size> data{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0};
 
   State() = default;
   explicit State(const std::array<double, size> & values)
@@ -82,10 +87,10 @@ struct State
   std::array<double, 3> get_position() const;
   std::array<double, 3> get_velocity() const;
 
-  /// Roll, pitch and yaw, in radians
+  /// Roll, pitch and yaw, in radians, computed from the quaternion
   std::array<double, 3> get_orientation() const;
 
-  /// The orientation as a quaternion (qx, qy, qz, qw)
+  /// The orientation as a unit quaternion (qx, qy, qz, qw)
   std::array<double, 4> get_orientation_quaternion() const;
 
   std::array<double, 3> get_accelerometer_bias() const;
@@ -95,15 +100,15 @@ struct State
 };
 
 /**
- * @brief State covariance P, a 15x15 matrix stored row-major
+ * @brief State covariance P, a 16x16 matrix stored row-major
  *
- * The named indices are the flat positions of the diagonal: `Covariance::YAW` is the
- * variance of `State::YAW`.
+ * The named indices are the flat positions of the diagonal: `Covariance::QZ` is the
+ * variance of `State::QZ`.
  */
 struct Covariance
 {
-  static constexpr int rows = 15;
-  static constexpr int cols = 15;
+  static constexpr int rows = 16;
+  static constexpr int cols = 16;
   static constexpr std::size_t size = rows * cols;
   static constexpr int X = State::X * (cols + 1);
   static constexpr int Y = State::Y * (cols + 1);
@@ -111,9 +116,10 @@ struct Covariance
   static constexpr int VX = State::VX * (cols + 1);
   static constexpr int VY = State::VY * (cols + 1);
   static constexpr int VZ = State::VZ * (cols + 1);
-  static constexpr int ROLL = State::ROLL * (cols + 1);
-  static constexpr int PITCH = State::PITCH * (cols + 1);
-  static constexpr int YAW = State::YAW * (cols + 1);
+  static constexpr int QW = State::QW * (cols + 1);
+  static constexpr int QX = State::QX * (cols + 1);
+  static constexpr int QY = State::QY * (cols + 1);
+  static constexpr int QZ = State::QZ * (cols + 1);
   static constexpr int ABX = State::ABX * (cols + 1);
   static constexpr int ABY = State::ABY * (cols + 1);
   static constexpr int ABZ = State::ABZ * (cols + 1);
@@ -176,19 +182,20 @@ struct Input
 };
 
 /**
- * @brief Pose measurement: position and roll, pitch, yaw, in the map frame
+ * @brief Pose measurement: position and the base->map quaternion (w first), in the map frame
  */
 struct PoseMeasurement
 {
-  static constexpr std::size_t size = 6;
+  static constexpr std::size_t size = 7;
   static constexpr int X = 0;
   static constexpr int Y = 1;
   static constexpr int Z = 2;
-  static constexpr int ROLL = 3;
-  static constexpr int PITCH = 4;
-  static constexpr int YAW = 5;
+  static constexpr int QW = 3;
+  static constexpr int QX = 4;
+  static constexpr int QY = 5;
+  static constexpr int QZ = 6;
 
-  std::array<double, size> data{};
+  std::array<double, size> data{0.0, 0.0, 0.0, 1.0};
 
   PoseMeasurement() = default;
   explicit PoseMeasurement(const std::array<double, size> & values)
@@ -199,7 +206,8 @@ struct PoseMeasurement
 };
 
 /**
- * @brief Variances of a pose measurement, one per component
+ * @brief Variances of a pose measurement's residual: position, then the rotation about the
+ *        map's x, y and z axes
  */
 struct PoseMeasurementCovariance
 {
@@ -207,9 +215,9 @@ struct PoseMeasurementCovariance
   static constexpr int X = 0;
   static constexpr int Y = 1;
   static constexpr int Z = 2;
-  static constexpr int ROLL = 3;
-  static constexpr int PITCH = 4;
-  static constexpr int YAW = 5;
+  static constexpr int RX = 3;
+  static constexpr int RY = 4;
+  static constexpr int RZ = 5;
 
   std::array<double, size> data{};
 

@@ -113,13 +113,13 @@ class TestEKF(unittest.TestCase):
         self.initial_state = np.array([
             0.0, 0.0, 0.0,  # Position (x, y, z)
             0.0, 0.0, 0.0,  # Velocity (vx, vy, vz)
-            0.0, 0.0, 0.0,  # Orientation (roll, pitch, yaw)
+            1.0, 0.0, 0.0, 0.0,  # Orientation (qw, qx, qy, qz)
             0.0, 0.0, 0.0,
             0.0, 0.0, 0.0
         ])
         self.initial_state = np.atleast_2d(self.initial_state).T
         # print(self.initial_state)
-        self.initial_covariance = np.eye(15) * 0.0
+        self.initial_covariance = np.eye(16) * 0.0
         # self.initial_covariance = np.diag([
         #     1e-2, 1e-2, 1e-2,  # Position covariance
         #     1e-3, 1e-3, 1e-3,  # Velocity covariance
@@ -152,11 +152,11 @@ class TestEKF(unittest.TestCase):
         self.assertIsNotNone(
             self.ekf_wrapper, 'EKFWrapper should be initialized.')
         self.assertEqual(self.ekf_wrapper.state.shape,
-                         (15, 1),
-                         'State shape should be (15,1).')
+                         (16, 1),
+                         'State shape should be (16,1).')
         self.assertEqual(self.ekf_wrapper.state_covariance.shape,
-                         (15, 15),
-                         'State covariance shape should be (15, 15).')
+                         (16, 16),
+                         'State covariance shape should be (16, 16).')
         self.assertEqual(self.ekf_wrapper.imu_noise.shape,
                          (6, 1),
                          'IMU noise shape should be (6,1).')

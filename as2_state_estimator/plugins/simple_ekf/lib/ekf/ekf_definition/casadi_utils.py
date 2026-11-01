@@ -224,6 +224,40 @@ class Utils():
         )
 
     @staticmethod
+    def quaternion_conjugate(q: ca.SX) -> ca.SX:
+        """
+        Conjugate of a quaternion [qw, qx, qy, qz]: the inverse rotation for a unit one.
+
+        :param q (ca.SX): The quaternion [qw, qx, qy, qz].
+
+        :return (ca.SX): The quaternion [qw, -qx, -qy, -qz].
+        """
+        return ca.vertcat(q[0], -q[1], -q[2], -q[3])
+
+    @staticmethod
+    def quaternion_velocity_derivative(
+            state_orientation: ca.SX,
+            input_acceleration: ca.SX,
+            gravity: ca.SX) -> ca.SX:
+        """
+        Compute the velocity derivative with the orientation as a quaternion.
+
+        v_dot = R(q) (input - noise) - g, q normalized first: the state's drifts off unit
+        norm between the corrections that renormalize it.
+
+        :param state_orientation (ca.SX): The state orientation [qw, qx, qy, qz].
+        :param input_acceleration (ca.SX): The acceleration [ax, ay, az].
+        :param gravity (ca.SX): The gravity vector.
+
+        :return (ca.SX): The velocity derivative [vx_dot, vy_dot, vz_dot].
+        """
+        v_dot = Utils.apply_rotation(
+            Utils.normalize_quaternion(state_orientation),
+            input_acceleration
+        )
+        return v_dot - gravity
+
+    @staticmethod
     def state_quaternion_normalization(state: ca.SX) -> ca.SX:
         """
         Normalize the quaternion part of the state vector.

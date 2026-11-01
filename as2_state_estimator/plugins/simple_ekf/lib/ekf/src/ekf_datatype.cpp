@@ -37,6 +37,7 @@
 #include "ekf/ekf_datatype.hpp"
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <sstream>
 #include <string>
@@ -74,24 +75,21 @@ std::array<double, 3> State::get_velocity() const
 
 std::array<double, 3> State::get_orientation() const
 {
-  return {data[ROLL], data[PITCH], data[YAW]};
+  const auto [x, y, z, w] = get_orientation_quaternion();
+  const double roll = std::atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y));
+  const double pitch = std::asin(std::clamp(2.0 * (w * y - z * x), -1.0, 1.0));
+  const double yaw = std::atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z));
+  return {roll, pitch, yaw};
 }
 
 std::array<double, 4> State::get_orientation_quaternion() const
 {
-  const double cy = std::cos(data[YAW] * 0.5);
-  const double sy = std::sin(data[YAW] * 0.5);
-  const double cr = std::cos(data[ROLL] * 0.5);
-  const double sr = std::sin(data[ROLL] * 0.5);
-  const double cp = std::cos(data[PITCH] * 0.5);
-  const double sp = std::sin(data[PITCH] * 0.5);
-
-  const double w = cr * cp * cy + sr * sp * sy;
-  const double x = sr * cp * cy - cr * sp * sy;
-  const double y = cr * sp * cy + sr * cp * sy;
-  const double z = cr * cp * sy - sr * sp * cy;
-
-  return {x, y, z, w};
+  const double norm = std::sqrt(
+    data[QW] * data[QW] + data[QX] * data[QX] + data[QY] * data[QY] + data[QZ] * data[QZ]);
+  if (!(norm > 0.0)) {
+    return {0.0, 0.0, 0.0, 1.0};
+  }
+  return {data[QX] / norm, data[QY] / norm, data[QZ] / norm, data[QW] / norm};
 }
 
 std::array<double, 3> State::get_accelerometer_bias() const
@@ -130,7 +128,7 @@ std::string Input::to_string() const
 
 std::string PoseMeasurement::to_string() const
 {
-  return format_values(data.data(), size, 6);
+  return format_values(data.data(), size, 7);
 }
 
 std::string PoseMeasurementCovariance::to_string() const

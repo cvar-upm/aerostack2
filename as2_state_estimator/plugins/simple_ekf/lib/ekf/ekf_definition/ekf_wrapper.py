@@ -153,14 +153,19 @@ class EKFWrapper:
         q_baba = (self.accelerometer_random_walk ** 2 * dt) * np.eye(3)
         q_bwbw = (self.gyroscope_random_walk ** 2 * dt) * np.eye(3)
 
-        process_noise_covariance = np.zeros((15, 15))
+        # Gyroscope noise through q_dot = 0.5 q x [0, w]: (I - q q^T) / 4 for a unit q
+        q = np.ravel(self.state[6:10])
+        q = q / np.linalg.norm(q)
+        q_qq = q_ww[0, 0] / 4.0 * (np.eye(4) - np.outer(q, q))
+
+        process_noise_covariance = np.zeros((16, 16))
         process_noise_covariance[0:3, 0:3] = q_pp
         process_noise_covariance[0:3, 3:6] = q_pv
         process_noise_covariance[3:6, 0:3] = q_pv
         process_noise_covariance[3:6, 3:6] = q_vv
-        process_noise_covariance[6:9, 6:9] = q_ww
-        process_noise_covariance[9:12, 9:12] = q_baba
-        process_noise_covariance[12:15, 12:15] = q_bwbw
+        process_noise_covariance[6:10, 6:10] = q_qq
+        process_noise_covariance[10:13, 10:13] = q_baba
+        process_noise_covariance[13:16, 13:16] = q_bwbw
         return process_noise_covariance
 
     def predict(self,
@@ -188,10 +193,24 @@ class EKFWrapper:
             process_noise_covariance,
             self.gravity,
         )
-        self.state = X_new
+        self.state = self.normalized(X_new)
         self.state_covariance = P_new
 
         return acc_in_world
+
+    @staticmethod
+    def normalized(state) -> np.ndarray:
+        """
+        Return the state with its orientation quaternion back on unit norm.
+
+        The covariance is left as it is.
+
+        :param state: The state vector [x, y, z, vx, vy, vz, qw, qx, qy, qz, biases].
+        :return: The same state with a unit quaternion.
+        """
+        state = np.array(state, dtype=np.float64).reshape((-1, 1))
+        state[6:10] /= np.linalg.norm(state[6:10])
+        return state
 
         # return F, L
 
@@ -204,6 +223,10 @@ class EKFWrapper:
         :param z (np.ndarray): The measurement (pose) vector.
         :param measurement_noise_covariance (np.ndarray): The measurement noise covariance matrix.
         """
+        # q and -q are the same rotation: the measured one goes to the state's hemisphere
+        z = np.array(z, dtype=np.float64).ravel()
+        if np.dot(z[3:7], np.ravel(self.state[6:10])) < 0.0:
+            z[3:7] = -z[3:7]
         X_new, P_new = self.ekf.update_pose_function(
             self.state,
             self.imu_noise,
@@ -211,6 +234,7 @@ class EKFWrapper:
             self.state_covariance,
             measurement_noise_covariance,
         )
+        X_new = self.normalized(X_new)
         self.map_to_odom = compute_map_to_odom(
             self.state,
             X_new,

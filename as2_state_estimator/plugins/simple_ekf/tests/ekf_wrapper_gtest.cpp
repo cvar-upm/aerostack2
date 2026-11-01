@@ -46,6 +46,25 @@
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Pose measurement from a position and roll, pitch, yaw (Z-Y-X)
+static ekf::PoseMeasurement poseMeasurement(
+  double x, double y, double z, double roll = 0.0, double pitch = 0.0, double yaw = 0.0)
+{
+  const Eigen::Quaterniond q =
+    Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *
+    Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
+    Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX());
+  return ekf::PoseMeasurement({x, y, z, q.w(), q.x(), q.y(), q.z()});
+}
+
+// The state's orientation quaternion, w first
+static Eigen::Quaterniond stateQuaternion(const ekf::State & s)
+{
+  return Eigen::Quaterniond(
+    s.data[ekf::State::QW], s.data[ekf::State::QX], s.data[ekf::State::QY],
+    s.data[ekf::State::QZ]);
+}
+
 static ekf::Covariance makeNonZeroCovariance()
 {
   std::array<double, ekf::Covariance::size> vals = {};
@@ -55,9 +74,10 @@ static ekf::Covariance makeNonZeroCovariance()
   vals[ekf::Covariance::VX] = 1.0;
   vals[ekf::Covariance::VY] = 1.0;
   vals[ekf::Covariance::VZ] = 1.0;
-  vals[ekf::Covariance::ROLL] = 1.0;
-  vals[ekf::Covariance::PITCH] = 1.0;
-  vals[ekf::Covariance::YAW] = 1.0;
+  // 1 rad^2 about each axis of the identity orientation is 1/4 on qx, qy, qz
+  vals[ekf::Covariance::QX] = 0.25;
+  vals[ekf::Covariance::QY] = 0.25;
+  vals[ekf::Covariance::QZ] = 0.25;
   return ekf::Covariance(vals);
 }
 
@@ -117,9 +137,11 @@ TEST_F(EkfWrapperTest, ResetRestoresState)
   // State should have changed (covariance grew, even if position is small)
   ekf_.reset(ekf::State(), ekf::Covariance());
 
+  // A default state is at rest at the origin, with the identity orientation
   ekf::State s = ekf_.get_state();
   for (std::size_t i = 0; i < ekf::State::size; ++i) {
-    EXPECT_DOUBLE_EQ(s.data[i], 0.0) << "state[" << i << "] != 0 after reset";
+    const double expected = (i == ekf::State::QW) ? 1.0 : 0.0;
+    EXPECT_DOUBLE_EQ(s.data[i], expected) << "state[" << i << "] not reset";
   }
   ekf::Covariance c = ekf_.get_state_covariance();
   for (std::size_t i = 0; i < ekf::Covariance::size; ++i) {
@@ -141,14 +163,14 @@ TEST_F(EkfWrapperTest, StationaryDrone_PositionUnchanged)
   EXPECT_NEAR(s.data[ekf::State::VX], 0.0, 1e-6);
   EXPECT_NEAR(s.data[ekf::State::VY], 0.0, 1e-6);
   EXPECT_NEAR(s.data[ekf::State::VZ], 0.0, 1e-6);
-  EXPECT_NEAR(s.data[ekf::State::YAW], 0.0, 1e-6);
+  EXPECT_NEAR(s.get_orientation()[2], 0.0, 1e-6);
 }
 
 // With P=0 the Kalman gain is 0: measurements must NOT change state.
 TEST_F(EkfWrapperTest, ZeroCovariance_UpdateHasNoEffect)
 {
   // P = 0 (default after reset), state at origin
-  ekf::PoseMeasurement meas({5.0, 5.0, 5.0, 0.1, 0.1, 0.1});
+  ekf::PoseMeasurement meas = poseMeasurement(5.0, 5.0, 5.0, 0.1, 0.1, 0.1);
   ekf::PoseMeasurementCovariance R;
   R.data.fill(1e-9);  // very confident measurement
 
@@ -169,7 +191,7 @@ TEST_F(EkfWrapperTest, NonZeroCovariance_PoseUpdatePullsState)
   ekf::State before = ekf_.get_state();
   double cov_x_before = ekf_.get_state_covariance().data[ekf::Covariance::X];
 
-  ekf::PoseMeasurement meas({1.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+  ekf::PoseMeasurement meas = poseMeasurement(1.0, 0.0, 0.0);
   ekf::PoseMeasurementCovariance R;
   R.data.fill(1e-4);
 
@@ -192,7 +214,7 @@ TEST_F(EkfWrapperTest, UpdatePose_ChangesMapToOdom)
 
   Eigen::Matrix4d map_to_odom_before = ekf_.get_map_to_odom();
 
-  ekf::PoseMeasurement meas({2.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+  ekf::PoseMeasurement meas = poseMeasurement(2.0, 0.0, 0.0);
   ekf::PoseMeasurementCovariance R;
   R.data.fill(1e-4);
   ekf_.update_pose(meas, R);
@@ -211,7 +233,7 @@ TEST_F(EkfWrapperTest, UpdatePoseOdom_DoesNotChangeMapToOdom)
 
   Eigen::Matrix4d map_to_odom_before = ekf_.get_map_to_odom();
 
-  ekf::PoseMeasurement meas({2.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+  ekf::PoseMeasurement meas = poseMeasurement(2.0, 0.0, 0.0);
   ekf::PoseMeasurementCovariance R;
   R.data.fill(1e-4);
   ekf_.update_pose_odom(meas, R);
@@ -221,42 +243,40 @@ TEST_F(EkfWrapperTest, UpdatePoseOdom_DoesNotChangeMapToOdom)
   EXPECT_TRUE(map_to_odom_after.isApprox(map_to_odom_before, 1e-12));
 }
 
-// After yaw rotation past π, the angle must stay in [-π, π].
-TEST_F(EkfWrapperTest, AngleNormalization_YawPastPi)
+// A yaw rotation through ±π is continuous: the quaternion has no branch to wrap.
+TEST_F(EkfWrapperTest, QuaternionNormalization_YawPastPi)
 {
   // Start with yaw just below π
   ekf::State s;
-  s.data.fill(0.0);
-  s.data[ekf::State::YAW] = 3.10;
-  ekf_.set_state(s);
+  const Eigen::Quaterniond q0(Eigen::AngleAxisd(3.10, Eigen::Vector3d::UnitZ()));
+  s.data[ekf::State::QW] = q0.w();
+  s.data[ekf::State::QZ] = q0.z();
   ekf_.reset(s, ekf::Covariance());
 
-  // Predict with positive yaw rate: wz = 0.5 rad/s for 0.1 s → Δyaw ≈ 0.05 rad
+  // Predict with positive yaw rate: wz = 0.5 rad/s for 0.1 s → Δyaw = 0.05 rad
   ekf::Input imu({0.0, 0.0, 9.81, 0.0, 0.0, 0.5});
   ekf_.predict(imu, 0.1);
 
-  double yaw = ekf_.get_state().data[ekf::State::YAW];
-  EXPECT_GE(yaw, -M_PI);
-  EXPECT_LE(yaw, M_PI);
+  const Eigen::Quaterniond q = stateQuaternion(ekf_.get_state());
+  EXPECT_NEAR(q.norm(), 1.0, 1e-12);
+  const Eigen::Quaterniond expected(Eigen::AngleAxisd(3.15, Eigen::Vector3d::UnitZ()));
+  EXPECT_NEAR(q.angularDistance(expected), 0.0, 1e-6);
 }
 
-// Manually force a yaw of -4.0 rad (outside [-π, π]), then trigger normalization
-// via a predict step. Expected result: yaw wrapped to ≈ -4.0 + 2π - π = 2.28 rad.
-TEST_F(EkfWrapperTest, AngleNormalization_LargeNegativeYaw)
+// A quaternion off unit norm is renormalized by the next step, keeping its rotation.
+TEST_F(EkfWrapperTest, QuaternionNormalization_NonUnitState)
 {
   ekf::State s;
-  s.data.fill(0.0);
-  s.data[ekf::State::YAW] = -4.0;
-  ekf_.set_state(s);
+  const Eigen::Quaterniond q0(Eigen::AngleAxisd(0.7, Eigen::Vector3d::UnitZ()));
+  s.data[ekf::State::QW] = 2.0 * q0.w();
+  s.data[ekf::State::QZ] = 2.0 * q0.z();
   ekf_.reset(s, ekf::Covariance());
 
   ekf_.predict(stationaryImu(), 0.005);
 
-  double yaw = ekf_.get_state().data[ekf::State::YAW];
-  EXPECT_GE(yaw, -M_PI - 1e-10);
-  EXPECT_LE(yaw, M_PI + 1e-10);
-  // Verify the expected wrapped value: fmod(-4+π, 2π)+2π-π ≈ 2.28
-  EXPECT_NEAR(yaw, -4.0 + 2.0 * M_PI, 1e-9);
+  const Eigen::Quaterniond q = stateQuaternion(ekf_.get_state());
+  EXPECT_NEAR(q.norm(), 1.0, 1e-12);
+  EXPECT_NEAR(q.angularDistance(q0), 0.0, 1e-9);
 }
 
 // Process noise should inflate the covariance during prediction.

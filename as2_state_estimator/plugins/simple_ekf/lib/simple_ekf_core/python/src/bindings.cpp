@@ -326,15 +326,17 @@ NB_MODULE(_simple_ekf_core, m) {
       return toNumpy(std::vector<double>(data.begin(), data.end()), {data.size()});
     },
     nb::rv_policy::automatic,
-    "The EKF state: x, y, z, vx, vy, vz, roll, pitch, yaw, then the accelerometer and "
+    "The EKF state: x, y, z, vx, vy, vz, qw, qx, qy, qz, then the accelerometer and "
     "gyroscope biases (STATE_NAMES).")
   .def_prop_ro(
     "state_covariance",
     [](const Filter & filter) {
       const auto & data = filter.stateCovariance().data;
-      return toNumpy(std::vector<double>(data.begin(), data.end()), {15, 15});
+      return toNumpy(
+        std::vector<double>(data.begin(), data.end()),
+        {static_cast<size_t>(ekf::Covariance::rows), static_cast<size_t>(ekf::Covariance::cols)});
     },
-    nb::rv_policy::automatic, "The 15x15 state covariance.")
+    nb::rv_policy::automatic, "The state covariance, a row and a column per state entry.")
   .def("is_earth_to_map_set", &Filter::isEarthToMapSet)
   .def("mark_earth_to_map_set", &Filter::markEarthToMapSet)
   .def("set_earth_to_map", &Filter::setEarthToMap, "earth_to_map"_a)
