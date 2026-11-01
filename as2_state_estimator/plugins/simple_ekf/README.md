@@ -37,13 +37,16 @@ normally the fastest of the two. Nothing is published until `earth -> map` is kn
 | --- | --- | --- |
 | 0-2 | `x, y, z` | Position in `map` |
 | 3-5 | `vx, vy, vz` | Velocity |
-| 6-8 | `roll, pitch, yaw` | Orientation, Euler angles |
-| 9-11 | `abx, aby, abz` | Accelerometer bias |
-| 12-14 | `wbx, wby, wbz` | Gyroscope bias |
+| 6-9 | `qw, qx, qy, qz` | Orientation, `base -> map` quaternion |
+| 10-12 | `abx, aby, abz` | Accelerometer bias |
+| 13-15 | `wbx, wby, wbz` | Gyroscope bias |
 
-> Attitude is parametrised as Euler angles, which is singular at pitch = ±90°. Fine for
-> normal flight, not for aggressive or near-vertical manoeuvres. A quaternion formulation
-> is future work.
+> Attitude is a quaternion, so it has no singularity: pitch = ±90° and beyond is handled
+> like any other attitude. The quaternion is renormalized after every step; the covariance
+> is not projected to match, so its component along the quaternion itself is meaningless.
+> A pose measurement's orientation is compared as the small rotation about the `map` axes
+> between the state's quaternion and the measured one, so its roll, pitch and yaw variances
+> are read as variances about `map` x, y and z.
 
 ### What a source can measure
 
@@ -269,7 +272,7 @@ Allan variance analysis if you have them.
 | --- | --- | --- | --- |
 | `initial_covariance.position` | double | `0.0` | `x, y, z` |
 | `initial_covariance.velocity` | double | `0.0` | `vx, vy, vz` |
-| `initial_covariance.orientation` | double | `0.0` | `roll, pitch, yaw` |
+| `initial_covariance.orientation` | double | `0.0` | Rotation about each axis, rad² (a quarter of it on `qx, qy, qz`) |
 | `initial_covariance.bias_acc` | double | `1e-8` | Accelerometer bias |
 | `initial_covariance.bias_gyro` | double | `1e-8` | Gyroscope bias |
 
@@ -300,7 +303,7 @@ Each name in `update_topics` refers to a sibling block:
 | `set_earth_map` | bool | yes | Bootstrap `earth -> map` from this topic's first message |
 | `use_message_covariance` | bool | yes | Use the message's covariance (scaled by the multipliers) instead of fixed values |
 | `position_covariance` | double[3] | when `use_message_covariance` is false | Fixed variances for `x, y, z` |
-| `orientation_covariance` | double[3] | when `use_message_covariance` is false | Fixed variances for `roll, pitch, yaw` |
+| `orientation_covariance` | double[3] | when `use_message_covariance` is false | Fixed variances for the rotation about `map` x, y, z |
 | `position_multiplier` | double[3] | optional | Scale on the message's position covariance. Default `[1, 1, 1]` |
 | `orientation_multiplier` | double[3] | optional | Scale on the message's orientation covariance. Default `[1, 1, 1]` |
 | `rigid_body_name` | string | for `RigidBodies` | Rigid body to track. Quote it |

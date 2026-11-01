@@ -43,6 +43,8 @@
 #ifndef SIMPLE_EKF_CORE__MEASUREMENT_UTILS_HPP_
 #define SIMPLE_EKF_CORE__MEASUREMENT_UTILS_HPP_
 
+#include <Eigen/Dense>
+
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -55,10 +57,11 @@
 namespace simple_ekf_core
 {
 
-/// The state each component of a pose measurement measures, in measurement order
-inline constexpr std::array<int, 6> kPoseStateIndices = {
-  ekf::State::X, ekf::State::Y, ekf::State::Z,
-  ekf::State::ROLL, ekf::State::PITCH, ekf::State::YAW};
+/// The state each position component of a pose measurement measures, in measurement order.
+/// The orientation is measured as a quaternion and compared as a rotation: see
+/// @ref poseInnovations
+inline constexpr std::array<int, 3> kPositionStateIndices = {
+  ekf::State::X, ekf::State::Y, ekf::State::Z};
 
 /// The state each component of a velocity measurement measures, in measurement order
 inline constexpr std::array<int, 3> kVelocityStateIndices = {
@@ -152,44 +155,95 @@ inline std::array<double, 36> getLinearCovarianceWithConfig(
 }
 
 /**
- * @brief A pose as the EKF measures it: position and roll, pitch, yaw
+ * @brief A pose as the EKF measures it: position and the unit quaternion, w first
  *
- * The angles are each in [-pi, pi], not unwrapped against any state: see
- * @ref unwrapPoseMeasurement.
+ * The quaternion's sign is whatever the pose's rotation gives, not matched to any state:
+ * see @ref unwrapPoseMeasurement.
  */
 inline ekf::PoseMeasurement poseToRawEkfMeasurement(const Rigid & pose)
 {
-  const std::array<double, 3> angles = toRollPitchYaw(pose.getRotation());
+  Quaternion rotation = pose.getRotation();
+  rotation.normalize();
   return ekf::PoseMeasurement(
     {
       pose.getOrigin().x(), pose.getOrigin().y(), pose.getOrigin().z(),
-      angles[0], angles[1], angles[2]});
+      rotation.w(), rotation.x(), rotation.y(), rotation.z()});
 }
 
 /**
- * @brief Move each measured angle to the branch closest to the state's
+ * @brief Put the measured quaternion on the state's hemisphere
  *
- * The EKF state tracks orientation continuously. Without this, a measurement crossing +-pi
- * would look like a jump of 2 pi to it.
+ * q and -q are the same rotation, but the residual 2 vec(q_meas x q_state^-1) is only the
+ * small rotation between them when the two have a non-negative dot product.
  */
 inline ekf::PoseMeasurement unwrapPoseMeasurement(
   const ekf::PoseMeasurement & raw,
   const ekf::State & reference_state)
 {
-  ekf::PoseMeasurement unwrapped = raw;
-  for (const int angle : {ekf::PoseMeasurement::ROLL, ekf::PoseMeasurement::PITCH,
-      ekf::PoseMeasurement::YAW})
-  {
-    const double state_angle = reference_state.data[kPoseStateIndices[angle]];
-    double difference = raw.data[angle] - state_angle;
-    difference -= 2.0 * M_PI * std::round(difference / (2.0 * M_PI));
-    unwrapped.data[angle] = state_angle + difference;
+  ekf::PoseMeasurement aligned = raw;
+  double dot = 0.0;
+  for (int i = 0; i < 4; ++i) {
+    dot += raw.data[ekf::PoseMeasurement::QW + i] * reference_state.data[ekf::State::QW + i];
   }
-  return unwrapped;
+  if (dot < 0.0) {
+    for (int i = 0; i < 4; ++i) {
+      aligned.data[ekf::PoseMeasurement::QW + i] = -raw.data[ekf::PoseMeasurement::QW + i];
+    }
+  }
+  return aligned;
+}
+
+/**
+ * @brief Each component of a pose measurement's innovation, and the state's variance along it
+ *
+ * Position: the difference and the position variances. Orientation: the rotation from the
+ * state's quaternion to the measured one about the map's x, y and z axes,
+ * 2 vec(q_meas x q_state^-1), the residual the update uses, and the state's variance about
+ * those axes, 4 E^T P_qq E with q = q_state + E dtheta / 2.
+ *
+ * @param aligned Measurement already on the state's hemisphere (@ref unwrapPoseMeasurement)
+ */
+inline void poseInnovations(
+  const ekf::PoseMeasurement & aligned,
+  const ekf::State & state,
+  const ekf::Covariance & state_covariance,
+  std::array<double, 6> & innovations,
+  std::array<double, 6> & state_variances)
+{
+  for (std::size_t i = 0; i < kPositionStateIndices.size(); ++i) {
+    const int state_index = kPositionStateIndices[i];
+    innovations[i] = aligned.data[i] - state.data[state_index];
+    state_variances[i] = state_covariance.data[state_index * (ekf::Covariance::cols + 1)];
+  }
+
+  const auto [qx, qy, qz, qw] = state.get_orientation_quaternion();
+  const Eigen::Quaterniond q_state(qw, qx, qy, qz);
+  const Eigen::Quaterniond q_meas(
+    aligned.data[ekf::PoseMeasurement::QW], aligned.data[ekf::PoseMeasurement::QX],
+    aligned.data[ekf::PoseMeasurement::QY], aligned.data[ekf::PoseMeasurement::QZ]);
+  const Eigen::Vector3d rotation = 2.0 * (q_meas * q_state.conjugate()).vec();
+
+  Eigen::Matrix<double, 4, 3> E;
+  E << -qx, -qy, -qz,
+    qw, qz, -qy,
+    -qz, qw, qx,
+    qy, -qx, qw;
+  const Eigen::Map<const Eigen::Matrix<double, ekf::Covariance::rows, ekf::Covariance::cols,
+    Eigen::RowMajor>> P(state_covariance.data.data());
+  const Eigen::Matrix3d rotation_covariance =
+    4.0 * E.transpose() * P.block<4, 4>(ekf::State::QW, ekf::State::QW) * E;
+
+  for (int i = 0; i < 3; ++i) {
+    innovations[3 + i] = rotation[i];
+    state_variances[3 + i] = rotation_covariance(i, i);
+  }
 }
 
 /**
  * @brief The diagonal of a 6x6 pose covariance, which is all the EKF takes
+ *
+ * The orientation block's diagonal is read as the variance of the rotation about the map's
+ * x, y and z axes, the residual the quaternion update uses.
  */
 inline ekf::PoseMeasurementCovariance covarianceToEkfMeasurementCovariance(
   const std::array<double, 36> & covariance)
@@ -250,9 +304,11 @@ inline void resolveUnobservedVariances(
 /**
  * @brief Give the unobserved components of a pose measurement nothing to say
  *
- * Each flagged component is overwritten with the state's own value and given the
+ * Each flagged position component is overwritten with the state's own value and given the
  * unobserved variance, so its innovation is zero and so is the correction it produces,
- * whatever the gain turns out to be.
+ * whatever the gain turns out to be. The orientation is one quaternion: it takes the state's
+ * only when all three rotations are unobserved; a partly observed one keeps its value and
+ * only the flagged rotations get the unobserved variance.
  *
  * The flags are read in the source's frame and applied after the rotation into the map one,
  * which is exact for the sets that survive a yaw-only rotation: all three, none, or the
@@ -265,10 +321,20 @@ inline void neutraliseUnobservedComponents(
   const ekf::State & state,
   double unobserved_variance)
 {
-  for (std::size_t index = 0; index < kPoseStateIndices.size(); ++index) {
+  for (std::size_t index = 0; index < kPositionStateIndices.size(); ++index) {
     if (unobserved[index]) {
-      measurement.data[index] = state.data[kPoseStateIndices[index]];
+      measurement.data[index] = state.data[kPositionStateIndices[index]];
       covariance.data[index] = unobserved_variance;
+    }
+  }
+  for (std::size_t index = 3; index < 6; ++index) {
+    if (unobserved[index]) {
+      covariance.data[index] = unobserved_variance;
+    }
+  }
+  if (unobserved[3] && unobserved[4] && unobserved[5]) {
+    for (int i = 0; i < 4; ++i) {
+      measurement.data[ekf::PoseMeasurement::QW + i] = state.data[ekf::State::QW + i];
     }
   }
 }

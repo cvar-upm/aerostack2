@@ -280,7 +280,7 @@ TEST(UtilsCovarianceTest, GetCovarianceWithConfig_MultiplierMode)
 // ---------------------------------------------------------------------------
 
 // Position is copied through unchanged, and an identity orientation
-// yields roll/pitch/yaw ~ 0.
+// yields the identity quaternion.
 TEST(UtilsMeasurementTest, PoseToEkfMeasurement_PositionExtraction)
 {
   auto msg = makePoseMsg("map", 1.5, 2.5, 3.5);
@@ -289,14 +289,14 @@ TEST(UtilsMeasurementTest, PoseToEkfMeasurement_PositionExtraction)
   EXPECT_NEAR(meas.data[ekf::PoseMeasurement::X], 1.5, 1e-12);
   EXPECT_NEAR(meas.data[ekf::PoseMeasurement::Y], 2.5, 1e-12);
   EXPECT_NEAR(meas.data[ekf::PoseMeasurement::Z], 3.5, 1e-12);
-  EXPECT_NEAR(meas.data[ekf::PoseMeasurement::ROLL], 0.0, 1e-9);
-  EXPECT_NEAR(meas.data[ekf::PoseMeasurement::PITCH], 0.0, 1e-9);
-  EXPECT_NEAR(meas.data[ekf::PoseMeasurement::YAW], 0.0, 1e-9);
+  EXPECT_NEAR(meas.data[ekf::PoseMeasurement::QW], 1.0, 1e-9);
+  EXPECT_NEAR(meas.data[ekf::PoseMeasurement::QX], 0.0, 1e-9);
+  EXPECT_NEAR(meas.data[ekf::PoseMeasurement::QY], 0.0, 1e-9);
+  EXPECT_NEAR(meas.data[ekf::PoseMeasurement::QZ], 0.0, 1e-9);
 }
 
-// A quaternion encoding a 90° yaw is converted back to yaw = π/2 via
-// tf2::Matrix3x3::getRPY.
-TEST(UtilsMeasurementTest, PoseToEkfMeasurement_QuatToYaw)
+// A quaternion encoding a 90° yaw passes through, w first.
+TEST(UtilsMeasurementTest, PoseToEkfMeasurement_QuatPassesThrough)
 {
   // Encode yaw = π/2 as quaternion
   double yaw = M_PI / 2.0;
@@ -306,11 +306,14 @@ TEST(UtilsMeasurementTest, PoseToEkfMeasurement_QuatToYaw)
 
   auto meas = simple_ekf_core::poseToRawEkfMeasurement(msg.pose);
 
-  EXPECT_NEAR(meas.data[ekf::PoseMeasurement::YAW], M_PI / 2.0, 1e-9);
+  EXPECT_NEAR(meas.data[ekf::PoseMeasurement::QW], qw, 1e-9);
+  EXPECT_NEAR(meas.data[ekf::PoseMeasurement::QX], 0.0, 1e-9);
+  EXPECT_NEAR(meas.data[ekf::PoseMeasurement::QY], 0.0, 1e-9);
+  EXPECT_NEAR(meas.data[ekf::PoseMeasurement::QZ], qz, 1e-9);
 }
 
 // The diagonal entries of a PoseWithCovariance are extracted into the
-// matching X/Y/Z/ROLL/PITCH/YAW fields of ekf::PoseMeasurementCovariance.
+// matching X/Y/Z/RX/RY/RZ fields of ekf::PoseMeasurementCovariance.
 TEST(UtilsMeasurementTest, PoseToEkfMeasurementCov_DiagonalExtraction)
 {
   std::array<double, 36> covariance{};
@@ -326,21 +329,46 @@ TEST(UtilsMeasurementTest, PoseToEkfMeasurementCov_DiagonalExtraction)
   EXPECT_DOUBLE_EQ(meas_cov.data[ekf::PoseMeasurementCovariance::X], 0.01);
   EXPECT_DOUBLE_EQ(meas_cov.data[ekf::PoseMeasurementCovariance::Y], 0.02);
   EXPECT_DOUBLE_EQ(meas_cov.data[ekf::PoseMeasurementCovariance::Z], 0.03);
-  EXPECT_DOUBLE_EQ(meas_cov.data[ekf::PoseMeasurementCovariance::ROLL], 0.004);
-  EXPECT_DOUBLE_EQ(meas_cov.data[ekf::PoseMeasurementCovariance::PITCH], 0.005);
-  EXPECT_DOUBLE_EQ(meas_cov.data[ekf::PoseMeasurementCovariance::YAW], 0.006);
+  EXPECT_DOUBLE_EQ(meas_cov.data[ekf::PoseMeasurementCovariance::RX], 0.004);
+  EXPECT_DOUBLE_EQ(meas_cov.data[ekf::PoseMeasurementCovariance::RY], 0.005);
+  EXPECT_DOUBLE_EQ(meas_cov.data[ekf::PoseMeasurementCovariance::RZ], 0.006);
 }
 
 // ---------------------------------------------------------------------------
-// Angle unwrapping
+// Quaternion hemisphere alignment
 // ---------------------------------------------------------------------------
 
-// No wrapping needed: measurement is close to state yaw
-TEST(UtilsAngleUnwrapTest, NoBoundary)
+namespace
+{
+
+// A state at rest at the origin with the given yaw
+ekf::State stateWithYaw(double yaw)
 {
   ekf::State state;
-  state.data.fill(0.0);
-  state.data[ekf::State::YAW] = 0.0;
+  state.data[ekf::State::QW] = std::cos(yaw / 2.0);
+  state.data[ekf::State::QZ] = std::sin(yaw / 2.0);
+  return state;
+}
+
+// The measured yaw relative to the state's, as the update's residual sees it:
+// 2 vec(q_meas x q_state^-1).z
+double residualYaw(const ekf::PoseMeasurement & meas, const ekf::State & state)
+{
+  const Eigen::Quaterniond q_meas(
+    meas.data[ekf::PoseMeasurement::QW], meas.data[ekf::PoseMeasurement::QX],
+    meas.data[ekf::PoseMeasurement::QY], meas.data[ekf::PoseMeasurement::QZ]);
+  const Eigen::Quaterniond q_state(
+    state.data[ekf::State::QW], state.data[ekf::State::QX], state.data[ekf::State::QY],
+    state.data[ekf::State::QZ]);
+  return 2.0 * (q_meas * q_state.conjugate()).vec().z();
+}
+
+}  // namespace
+
+// Same hemisphere: the measurement is left as it is
+TEST(UtilsQuaternionAlignTest, NoBoundary)
+{
+  const ekf::State state = stateWithYaw(0.0);
 
   double measured_yaw = 0.1;
   double qz = std::sin(measured_yaw / 2.0);
@@ -349,19 +377,17 @@ TEST(UtilsAngleUnwrapTest, NoBoundary)
 
   auto raw = simple_ekf_core::poseToRawEkfMeasurement(msg.pose);
   auto meas = simple_ekf_core::unwrapPoseMeasurement(raw, state);
-  EXPECT_NEAR(meas.data[ekf::PoseMeasurement::YAW], 0.1, 1e-9);
+  EXPECT_EQ(meas.data, raw.data);
+  EXPECT_NEAR(residualYaw(meas, state), 2.0 * std::sin(0.05), 1e-9);
 }
 
-// State yaw = 3.0 rad (EKF has tracked past +π); sensor yaw = -3.1 rad
-// (getRPY wraps it into [-π, π]). Without unwrapping this looks like a 6.1 rad
-// jump. The correct unwrapped value is ≈ 3.18 rad.
-TEST(UtilsAngleUnwrapTest, PositiveSideToNegative)
+// State yaw = 3.0 rad; sensor yaw = -3.1 rad, 0.18 rad further round. Whichever sign the
+// pose's quaternion comes out with, the aligned one reads as that small turn, not as a turn
+// of 6.1 rad the other way.
+TEST(UtilsQuaternionAlignTest, PositiveSideToNegative)
 {
-  ekf::State state;
-  state.data.fill(0.0);
-  state.data[ekf::State::YAW] = 3.0;
+  const ekf::State state = stateWithYaw(3.0);
 
-  // Encode angle -3.1 as quaternion; getRPY will return -3.1
   double measured_yaw = -3.1;
   double qz = std::sin(measured_yaw / 2.0);
   double qw = std::cos(measured_yaw / 2.0);
@@ -370,20 +396,30 @@ TEST(UtilsAngleUnwrapTest, PositiveSideToNegative)
   auto raw = simple_ekf_core::poseToRawEkfMeasurement(msg.pose);
   auto meas = simple_ekf_core::unwrapPoseMeasurement(raw, state);
 
-  // diff = -3.1 - 3.0 = -6.1; round(-6.1/2π) = -1; corrected diff = -6.1 + 2π ≈ 0.18
-  // result = 3.0 + 0.18 ≈ 3.18
-  double expected = 3.0 + ((-3.1 - 3.0) - 2.0 * M_PI * std::round((-3.1 - 3.0) / (2.0 * M_PI)));
-  EXPECT_NEAR(meas.data[ekf::PoseMeasurement::YAW], expected, 1e-9);
-  // The result should NOT be -3.1 (the raw sensor value)
-  EXPECT_FALSE(std::abs(meas.data[ekf::PoseMeasurement::YAW] - (-3.1)) < 0.01);
+  const double turn = (-3.1 + 2.0 * M_PI) - 3.0;
+  EXPECT_NEAR(residualYaw(meas, state), 2.0 * std::sin(turn / 2.0), 1e-9);
 }
 
-// State yaw = -3.0; sensor yaw = +3.1 → unwrapped ≈ -3.18
-TEST(UtilsAngleUnwrapTest, NegativeSideToPositive)
+// A quaternion on the other hemisphere from the state's is negated, and only then
+TEST(UtilsQuaternionAlignTest, OppositeSignIsFlipped)
 {
-  ekf::State state;
-  state.data.fill(0.0);
-  state.data[ekf::State::YAW] = -3.0;
+  const ekf::State state = stateWithYaw(3.0);
+  const double half = 0.5 * (-3.1 + 2.0 * M_PI);
+
+  // The same rotation as yaw 3.18, written with the sign opposite to the state's
+  const ekf::PoseMeasurement raw({0.0, 0.0, 0.0, -std::cos(half), 0.0, 0.0, -std::sin(half)});
+  auto meas = simple_ekf_core::unwrapPoseMeasurement(raw, state);
+  EXPECT_DOUBLE_EQ(meas.data[ekf::PoseMeasurement::QW], std::cos(half));
+  EXPECT_DOUBLE_EQ(meas.data[ekf::PoseMeasurement::QZ], std::sin(half));
+
+  // Already on the state's: left as it is
+  EXPECT_EQ(simple_ekf_core::unwrapPoseMeasurement(meas, state).data, meas.data);
+}
+
+// State yaw = -3.0; sensor yaw = +3.1, 0.18 rad further round the other way
+TEST(UtilsQuaternionAlignTest, NegativeSideToPositive)
+{
+  const ekf::State state = stateWithYaw(-3.0);
 
   double measured_yaw = 3.1;
   double qz = std::sin(measured_yaw / 2.0);
@@ -393,9 +429,8 @@ TEST(UtilsAngleUnwrapTest, NegativeSideToPositive)
   auto raw = simple_ekf_core::poseToRawEkfMeasurement(msg.pose);
   auto meas = simple_ekf_core::unwrapPoseMeasurement(raw, state);
 
-  double expected = -3.0 +
-    ((3.1 - (-3.0)) - 2.0 * M_PI * std::round((3.1 - (-3.0)) / (2.0 * M_PI)));
-  EXPECT_NEAR(meas.data[ekf::PoseMeasurement::YAW], expected, 1e-9);
+  const double turn = (3.1 - 2.0 * M_PI) - (-3.0);
+  EXPECT_NEAR(residualYaw(meas, state), 2.0 * std::sin(turn / 2.0), 1e-9);
 }
 
 // ---------------------------------------------------------------------------
@@ -598,8 +633,7 @@ TEST(UtilsTransformFrameTest, CovarianceRotated_90DegYaw)
 // reading when gyro bias is zero.
 TEST(UtilsTwistTest, VelocityInBaseFrame_Identity)
 {
-  ekf::State state;
-  state.data.fill(0.0);
+  ekf::State state;  // at rest at the origin, identity orientation
   state.data[ekf::State::VX] = 1.0;
 
   tf2::Transform map_to_base;
@@ -623,8 +657,7 @@ TEST(UtilsTwistTest, VelocityInBaseFrame_Identity)
 // estimated gyroscope bias, per axis.
 TEST(UtilsTwistTest, GyroBiasSubtracted)
 {
-  ekf::State state;
-  state.data.fill(0.0);
+  ekf::State state;  // at rest at the origin, identity orientation
   state.data[ekf::State::WBX] = 0.05;
   state.data[ekf::State::WBY] = 0.05;
   state.data[ekf::State::WBZ] = 0.05;
@@ -653,8 +686,7 @@ TEST(UtilsTwistTest, GyroBiasSubtracted)
 TEST(UtilsStateTransformsTest, ConstructFromEkfState_OdomToBaseConsistency)
 {
   // EKF state at (1,2,3), identity orientation
-  ekf::State state;
-  state.data.fill(0.0);
+  ekf::State state;  // at rest at the origin, identity orientation
   state.data[ekf::State::X] = 1.0;
   state.data[ekf::State::Y] = 2.0;
   state.data[ekf::State::Z] = 3.0;
@@ -868,10 +900,11 @@ TEST(UtilsUnobservedTest, NeutralisedComponentsHaveNoInnovationLeft) {
   ekf::State state;
   state.data[ekf::State::X] = 1.5;
   state.data[ekf::State::Y] = -2.5;
-  state.data[ekf::State::YAW] = 0.7;
+  state.data[ekf::State::QW] = std::cos(0.35);
+  state.data[ekf::State::QZ] = std::sin(0.35);
 
   // A rangefinder: height only, and its zeros must not read as "the vehicle is at the origin".
-  ekf::PoseMeasurement measurement({0.0, 0.0, 1.2, 0.0, 0.0, 0.0});
+  ekf::PoseMeasurement measurement({0.0, 0.0, 1.2, 1.0, 0.0, 0.0, 0.0});
   ekf::PoseMeasurementCovariance covariance({1.0, 1.0, 4e-4, 1.0, 1.0, 1.0});
   const std::array<bool, 6> unobserved = {true, true, false, true, true, true};
 
@@ -880,7 +913,10 @@ TEST(UtilsUnobservedTest, NeutralisedComponentsHaveNoInnovationLeft) {
 
   EXPECT_DOUBLE_EQ(measurement.data[ekf::PoseMeasurement::X], state.data[ekf::State::X]);
   EXPECT_DOUBLE_EQ(measurement.data[ekf::PoseMeasurement::Y], state.data[ekf::State::Y]);
-  EXPECT_DOUBLE_EQ(measurement.data[ekf::PoseMeasurement::YAW], state.data[ekf::State::YAW]);
+  // All three rotations unobserved: the orientation is the state's
+  EXPECT_DOUBLE_EQ(measurement.data[ekf::PoseMeasurement::QW], state.data[ekf::State::QW]);
+  EXPECT_DOUBLE_EQ(measurement.data[ekf::PoseMeasurement::QZ], state.data[ekf::State::QZ]);
+  EXPECT_DOUBLE_EQ(covariance.data[ekf::PoseMeasurementCovariance::RZ], 1.0e2);
   EXPECT_DOUBLE_EQ(measurement.data[ekf::PoseMeasurement::Z], 1.2);
   EXPECT_DOUBLE_EQ(
     covariance.data[ekf::PoseMeasurementCovariance::X], 1.0e2);

@@ -41,20 +41,6 @@
 namespace ekf
 {
 
-namespace
-{
-
-double wrap_to_pi(double angle)
-{
-  angle = std::fmod(angle + M_PI, 2.0 * M_PI);
-  if (angle < 0.0) {
-    angle += 2.0 * M_PI;
-  }
-  return angle - M_PI;
-}
-
-}  // namespace
-
 EKFWrapper::EKFWrapper()
 {
   initialize_args_and_results();
@@ -167,7 +153,12 @@ Covariance EKFWrapper::compute_process_noise_covariance(double dt) const
   q.block<3, 3>(State::X, State::VX) = q_position_velocity;
   q.block<3, 3>(State::VX, State::X) = q_position_velocity;
   q.block<3, 3>(State::VX, State::VX) = accelerometer_variance * dt * identity;
-  q.block<3, 3>(State::ROLL, State::ROLL) = gyroscope_variance * dt * identity;
+  // Gyroscope noise through q_dot = 0.5 q x [0, w]: G = 0.5 Xi(q), and G G^T = (I - q q^T) / 4
+  // for a unit q, which has no component along q itself
+  const auto [qx, qy, qz, qw] = ekf_data_.state.get_orientation_quaternion();
+  const Eigen::Vector4d unit_q(qw, qx, qy, qz);
+  q.block<4, 4>(State::QW, State::QW) = gyroscope_variance * dt / 4.0 *
+    (Eigen::Matrix4d::Identity() - unit_q * unit_q.transpose());
   q.block<3, 3>(State::ABX, State::ABX) = accelerometer_bias_variance * dt * identity;
   q.block<3, 3>(State::WBX, State::WBX) = gyroscope_bias_variance * dt * identity;
 
@@ -205,17 +196,27 @@ Eigen::Matrix4d EKFWrapper::pose_to_transform(
   return transform;
 }
 
+Eigen::Matrix4d EKFWrapper::pose_to_transform(
+  const Eigen::Vector3d & position,
+  const std::array<double, 4> & quaternion_xyzw)
+{
+  const Eigen::Quaterniond q(
+    quaternion_xyzw[3], quaternion_xyzw[0], quaternion_xyzw[1], quaternion_xyzw[2]);
+  Eigen::Matrix4d transform = Eigen::Matrix4d::Identity();
+  transform.block<3, 3>(0, 0) = q.normalized().toRotationMatrix();
+  transform.block<3, 1>(0, 3) = position;
+  return transform;
+}
+
 Eigen::Matrix4d EKFWrapper::compute_map_to_odom(
   const State & state,
   const State & new_state,
   const Eigen::Matrix4d & prev_map_to_odom)
 {
   const Eigen::Matrix4d T_map_base_prev = pose_to_transform(
-    Eigen::Vector3d(state.get_position().data()),
-    Eigen::Vector3d(state.get_orientation().data()));
+    Eigen::Vector3d(state.get_position().data()), state.get_orientation_quaternion());
   const Eigen::Matrix4d T_map_base_new = pose_to_transform(
-    Eigen::Vector3d(new_state.get_position().data()),
-    Eigen::Vector3d(new_state.get_orientation().data()));
+    Eigen::Vector3d(new_state.get_position().data()), new_state.get_orientation_quaternion());
 
   const Eigen::Matrix4d T_base_map_prev = T_map_base_prev.inverse();
   const Eigen::Matrix4d delta = T_map_base_new * T_base_map_prev;
@@ -274,8 +275,14 @@ Eigen::Vector<double, 7> EKFWrapper::transform_to_pose(const Eigen::Matrix4d & t
 
 void EKFWrapper::correct_state()
 {
-  for (const int angle : {State::ROLL, State::PITCH, State::YAW}) {
-    ekf_data_.state.data[angle] = wrap_to_pi(ekf_data_.state.data[angle]);
+  auto & x = ekf_data_.state.data;
+  const double norm = std::sqrt(
+    x[State::QW] * x[State::QW] + x[State::QX] * x[State::QX] +
+    x[State::QY] * x[State::QY] + x[State::QZ] * x[State::QZ]);
+  if (norm > 0.0 && std::isfinite(norm)) {
+    for (const int component : {State::QW, State::QX, State::QY, State::QZ}) {
+      x[component] /= norm;
+    }
   }
 }
 

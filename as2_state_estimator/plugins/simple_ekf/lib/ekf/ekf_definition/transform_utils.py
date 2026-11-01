@@ -264,15 +264,15 @@ def compute_map_to_odom(state, X_new, prev_map_to_odom):
     """
     Compute the new map→odom transform from a state update.
 
-    state:            prev map→base pose as a 9-vector [x,y,z, ..., roll,pitch,yaw]
+    state:            prev map→base pose as a state vector [x,y,z, vx,vy,vz, qw,qx,qy,qz, ...]
     X_new:            new  map→base pose in same format
     prev_map_to_odom: 4×4 homogeneous map→odom from last time
     """
     # 1) extract positions and RPY
     p_prev = state[0:3]
-    r_prev = (state[6], state[7], state[8])  # roll, pitch, yaw
+    r_prev = quaternion_to_euler(np.ravel(state[6:10]))  # roll, pitch, yaw
     p_new = X_new[0:3]
-    r_new = (X_new[6], X_new[7], X_new[8])  # roll, pitch, yaw
+    r_new = quaternion_to_euler(np.ravel(X_new[6:10]))  # roll, pitch, yaw
 
     # 2) builds
     T_map_base_prev = pose_to_transform(p_prev, r_prev)

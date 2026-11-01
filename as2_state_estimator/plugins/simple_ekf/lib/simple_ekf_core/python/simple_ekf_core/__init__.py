@@ -34,7 +34,7 @@ from ._simple_ekf_core import (Config, Filter, generate_covariance_from_config,
                                Transform, TwistInBase, TwistSample)
 
 # What each entry of Filter.state is, in order
-STATE_NAMES = ('x', 'y', 'z', 'vx', 'vy', 'vz', 'roll', 'pitch', 'yaw',
+STATE_NAMES = ('x', 'y', 'z', 'vx', 'vy', 'vz', 'qw', 'qx', 'qy', 'qz',
                'abx', 'aby', 'abz', 'wbx', 'wby', 'wbz')
 
 __all__ = ['Config', 'Filter', 'generate_covariance_from_config', 'get_covariance_with_config',

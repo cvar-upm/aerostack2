@@ -473,17 +473,22 @@ void Plugin::logFilterState(const std::string & context) const
 {
   const auto & x = filter_->state().data;
   const auto & p = filter_->stateCovariance().data;
+  const auto angles = filter_->state().get_orientation();
   RCLCPP_INFO(
     node_ptr_->get_logger(),
-    "EKF state %s: [x=%.3f, y=%.3f, z=%.3f, roll=%.3f, pitch=%.3f, yaw=%.3f]", context.c_str(),
+    "EKF state %s: [x=%.3f, y=%.3f, z=%.3f, qw=%.4f, qx=%.4f, qy=%.4f, qz=%.4f] "
+    "(roll=%.3f, pitch=%.3f, yaw=%.3f)", context.c_str(),
     x[ekf::State::X], x[ekf::State::Y], x[ekf::State::Z],
-    x[ekf::State::ROLL], x[ekf::State::PITCH], x[ekf::State::YAW]);
+    x[ekf::State::QW], x[ekf::State::QX], x[ekf::State::QY], x[ekf::State::QZ],
+    angles[0], angles[1], angles[2]);
   RCLCPP_INFO(
     node_ptr_->get_logger(),
-    "EKF covariance %s: [c_x=%.6f, c_y=%.6f, c_z=%.6f, c_roll=%.6f, c_pitch=%.6f, c_yaw=%.6f]",
+    "EKF covariance %s: [c_x=%.6f, c_y=%.6f, c_z=%.6f, c_qw=%.6f, c_qx=%.6f, c_qy=%.6f, "
+    "c_qz=%.6f]",
     context.c_str(),
     p[ekf::Covariance::X], p[ekf::Covariance::Y], p[ekf::Covariance::Z],
-    p[ekf::Covariance::ROLL], p[ekf::Covariance::PITCH], p[ekf::Covariance::YAW]);
+    p[ekf::Covariance::QW], p[ekf::Covariance::QX], p[ekf::Covariance::QY],
+    p[ekf::Covariance::QZ]);
 }
 
 bool Plugin::setEarthToMapFromFirstPose(

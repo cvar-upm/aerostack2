@@ -78,12 +78,12 @@ class EKFNode(Node):
         self.initial_state = np.array([
             0.0, 0.0, 0.0,  # Position (x, y, z)
             0.0, 0.0, 0.0,  # Velocity (vx, vy, vz)
-            0.0, 0.0, 0.0,  # Orientation (roll, pitch, yaw)
+            1.0, 0.0, 0.0, 0.0,  # Orientation (qw, qx, qy, qz)
             0.0, 0.0, 0.0,
             0.0, 0.0, 0.0
         ])
-        self.initial_covariance = np.zeros((15, 15))
-        self.initial_covariance[9:15, 9:15] = np.identity(
+        self.initial_covariance = np.zeros((16, 16))
+        self.initial_covariance[10:16, 10:16] = np.identity(
             6) * 1  # bias covariance
 
         print('Initial state:', self.initial_state)
@@ -225,13 +225,9 @@ class EKFNode(Node):
                 orientation_y = msg.pose.orientation.y
                 orientation_z = msg.pose.orientation.z
                 orientation_w = msg.pose.orientation.w
-                orientation = quaternion_to_euler(
-                    np.array([orientation_w, orientation_x, orientation_y, orientation_z]))
-                # print("Pose orientation (roll, pitch, yaw):", orientation)
-
                 pose_measurement = np.array([
                     pose_x, pose_y, pose_z,
-                    orientation[0], orientation[1], orientation[2],
+                    orientation_w, orientation_x, orientation_y, orientation_z,
                 ])
 
                 self.ekf_wrapper.update_pose(
@@ -264,7 +260,7 @@ class EKFNode(Node):
             # print(np.diag(covariance)[9:12])
             # print(np.diag(covariance)[12:15])
             state_position = state[0:3]
-            state_rpy = (state[6], state[7], state[8])
+            state_rpy = quaternion_to_euler(state[6:10])
 
             # State is map-base, get transform
             T_map_base = pose_to_transform(state_position, state_rpy)
@@ -336,8 +332,9 @@ class EKFNode(Node):
             odom_msg.pose.pose.orientation.x = float(pose_odom_base[4])
             odom_msg.pose.pose.orientation.y = float(pose_odom_base[5])
             odom_msg.pose.pose.orientation.z = float(pose_odom_base[6])
-            diag_covariance = np.double(np.diag(
-                np.append(np.diag(covariance)[0:3], np.diag(covariance)[6:9]))).flatten().tolist()
+            # qx, qy, qz variances x 4: the angle variances about each axis, near identity
+            variances = np.append(np.diag(covariance)[0:3], 4.0 * np.diag(covariance)[7:10])
+            diag_covariance = np.double(np.diag(variances)).flatten().tolist()
             odom_msg.pose.covariance = diag_covariance
             odom_msg.twist.twist.linear.x = float(state[3])
             odom_msg.twist.twist.linear.y = float(state[4])

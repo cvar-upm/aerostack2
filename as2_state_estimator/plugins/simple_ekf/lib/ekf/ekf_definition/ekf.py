@@ -52,16 +52,15 @@ class EKF():
         """
         # Derivatives
         p_dot = X[3:6]  # v
-        v_dot = Utils.velocity_derivative(
-            X[6:9],
+        v_dot = Utils.quaternion_velocity_derivative(
+            X[6:10],
             input_acc,
             self.g
         )  # R(q)*(a_meas − b_a) + g
-        # q_dot = ca.SX.zeros(3, 1)  # rotation derivative placeholder
-        q_dot = Utils.euler_rotation_derivative(
-            X[6:9],
+        q_dot = Utils.quaternion_derivate(
+            X[6:10],
             input_angular_velocity,
-        )
+        )  # 0.5 q x [0, w_meas − b_w]
         biases_dot = ca.SX.zeros(6, 1)  # biases are constant
         # New state
         return ca.vertcat(
@@ -79,8 +78,10 @@ class EKF():
         self.g = ca.SX.sym('g', 3)  # Gravity vector (3D)
 
         # State vector
-        # x, y, z, vx, vy, vz, roll, pitch, yaw, abx, aby, abz, wbx, wby, wbz
-        self.X = ca.SX.sym('X', 15)
+        # x, y, z, vx, vy, vz, qw, qx, qy, qz, abx, aby, abz, wbx, wby, wbz
+        # The quaternion is base->map (Hamilton, w first). Nothing here keeps it unit: the
+        # wrapper renormalizes it after every step, and the covariance is left as it is
+        self.X = ca.SX.sym('X', 16)
         # self.x, self.y, self.z, \
         #     self.vx, self.vy, self.vz, \
         #     self.qw, self.qx, self.qy, self.qz, \
@@ -88,9 +89,9 @@ class EKF():
         #     self.wbx, self.wby, self.wbz = ca.vertsplit(self.X)
         state_position = self.X[0:3]
         state_velocity = self.X[3:6]
-        state_orientation = self.X[6:9]
-        state_accelerometer_bias = self.X[9:12]
-        state_gyrometer_bias = self.X[12:15]
+        state_orientation = self.X[6:10]
+        state_accelerometer_bias = self.X[10:13]
+        state_gyrometer_bias = self.X[13:16]
         state_bias = ca.vertcat(
             state_accelerometer_bias,
             state_gyrometer_bias
@@ -141,11 +142,17 @@ class EKF():
 
         # print(self.f)
 
-        # Output function pose
-        # x, y, z, roll, pitch, yaw
-        self.h_pose = ca.vertcat(
-            state_position,
-            state_orientation,
+        # Pose measurement: x, y, z, qw, qx, qy, qz, in the map frame. Its residual has six
+        # components, the position difference and the small rotation from the state's
+        # orientation to the measured one about the map's axes, 2 vec(q_meas x q_state^-1).
+        # The caller puts q_meas on the state's hemisphere (q and -q are the same rotation).
+        self.Z_pose = ca.SX.sym('Z_pose', 7)
+        orientation_error = Utils.quaternion_multiply(
+            self.Z_pose[3:7],
+            Utils.quaternion_conjugate(Utils.normalize_quaternion(state_orientation)))
+        self.Y_residual_pose = ca.vertcat(
+            self.Z_pose[0:3] - state_position,
+            2.0 * orientation_error[1:4],
         )
 
         # Output function velocity
@@ -157,7 +164,8 @@ class EKF():
         # Jacobians
         self.F = ca.jacobian(self.f, self.X)
         self.L = ca.jacobian(self.f, self.W)
-        self.H_pose = ca.jacobian(self.h_pose, self.X)
+        # The residual is not z - h(X): its Jacobian is minus the measurement model's
+        self.H_pose = -ca.jacobian(self.Y_residual_pose, self.X)
         self.H_velocity = ca.jacobian(self.h_velocity, self.X)
 
         # Substitute W with 0
@@ -195,27 +203,22 @@ class EKF():
         self.P_pred = self.F @ self.P @ self.F.T + self.Q
 
         # Update step with pose measurement
-        # Measurement vector (pose)
-        self.Z_pose = ca.SX.sym('Z_pose', self.h_pose.size()[0])
-        # Measurement Noise covariance matrix
-        self.aux_R_vector_pose = ca.SX.sym('R_pose', self.h_pose.size()[0])
-        self.R_pose = ca.SX.zeros(self.h_pose.size()[0], self.h_pose.size()[0])
-        for i in range(self.h_pose.size()[0]):
-            for j in range(i, self.h_pose.size()[0]):
-                if i == j:
-                    self.R_pose[i, j] = self.aux_R_vector_pose[i]
+        # Measurement Noise covariance matrix: x, y, z and the rotation about the map's x, y, z
+        residual_size = self.Y_residual_pose.size()[0]
+        self.aux_R_vector_pose = ca.SX.sym('R_pose', residual_size)
+        self.R_pose = ca.SX.zeros(residual_size, residual_size)
+        for i in range(residual_size):
+            self.R_pose[i, i] = self.aux_R_vector_pose[i]
 
-        # Y_residual_pose = measurement residual
+        # Y_residual_pose = measurement residual (defined above)
         # Z_pose = measurement
-        # h_pose = expected measurement from the state
         # S_pose = residual covariance
-        # H_pose = Jacobian of h_pose with respect to state
+        # H_pose = minus the Jacobian of the residual with respect to state
         # P = current state covariance
         # R_pose = measurement noise covariance
         # K_pose = Kalman gain
         # X_update_pose = updated state
         # P_update_pose = updated state covariance
-        self.Y_residual_pose = self.Z_pose - self.h_pose
         self.S_pose = self.H_pose @ self.P @ self.H_pose.T + self.R_pose
         self.K_pose = self.P @ self.H_pose.T @ ca.pinv(self.S_pose)
 

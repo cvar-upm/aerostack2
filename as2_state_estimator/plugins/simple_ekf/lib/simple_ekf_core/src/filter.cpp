@@ -122,16 +122,19 @@ Config Filter::validated(const Config & config, const Logger & logger)
 void Filter::setupWrapper()
 {
   ekf::Covariance initial_covariance;
-  const std::array<std::pair<int, double>, 5> groups = {{
+  const std::array<std::pair<int, double>, 4> groups = {{
     {ekf::State::X, config_.initial_position_covariance},
     {ekf::State::VX, config_.initial_velocity_covariance},
-    {ekf::State::ROLL, config_.initial_orientation_covariance},
     {ekf::State::ABX, config_.initial_bias_acc_covariance},
     {ekf::State::WBX, config_.initial_bias_gyro_covariance}}};
   for (const auto & [first_state, variance] : groups) {
     for (int state = first_state; state < first_state + 3; ++state) {
       initial_covariance.data[varianceIndex(state)] = variance;
     }
+  }
+  // An angle variance s about each axis of the identity orientation is s / 4 on qx, qy, qz
+  for (const int state : {ekf::State::QX, ekf::State::QY, ekf::State::QZ}) {
+    initial_covariance.data[varianceIndex(state)] = config_.initial_orientation_covariance / 4.0;
   }
   ekf_wrapper_.reset(ekf::State(), initial_covariance);
 
@@ -166,16 +169,19 @@ bool Filter::setEarthToMapFromFirstPose(const Rigid & pose, SourceFrame frame)
 
 void Filter::resetStateToPose(const Rigid & pose_in_map)
 {
-  const std::array<double, 3> angles = toRollPitchYaw(pose_in_map.getRotation());
+  Quaternion rotation = pose_in_map.getRotation();
+  rotation.normalize();
 
   ekf::State state;
   state.data[ekf::State::X] = pose_in_map.getOrigin().x();
   state.data[ekf::State::Y] = pose_in_map.getOrigin().y();
   state.data[ekf::State::Z] = pose_in_map.getOrigin().z();
-  state.data[ekf::State::ROLL] = angles[0];
-  state.data[ekf::State::PITCH] = angles[1];
-  state.data[ekf::State::YAW] = angles[2];
+  state.data[ekf::State::QW] = rotation.w();
+  state.data[ekf::State::QX] = rotation.x();
+  state.data[ekf::State::QY] = rotation.y();
+  state.data[ekf::State::QZ] = rotation.z();
   ekf_wrapper_.set_state(state);
+  const std::array<double, 3> angles = state.get_orientation();
 
   // Start the smoothing from the new pose instead of blending away from a stale one
   output_blend_initialized_ = false;
@@ -186,7 +192,7 @@ void Filter::resetStateToPose(const Rigid & pose_in_map)
       "Reset EKF state to first received pose: "
       "[x=%.3f, y=%.3f, z=%.3f, roll=%.3f, pitch=%.3f, yaw=%.3f]",
       state.data[ekf::State::X], state.data[ekf::State::Y], state.data[ekf::State::Z],
-      state.data[ekf::State::ROLL], state.data[ekf::State::PITCH], state.data[ekf::State::YAW]);
+      angles[0], angles[1], angles[2]);
   }
 }
 
@@ -428,10 +434,8 @@ bool Filter::processPose(SourceState & source, const PoseSample & pose, Nanoseco
   std::array<double, 6> innovations;
   std::array<double, 6> state_variances;
   std::array<double, 6> measurement_variances;
-  for (std::size_t i = 0; i < kPoseStateIndices.size(); ++i) {
-    const int state_index = kPoseStateIndices[i];
-    innovations[i] = unwrapped_now.data[i] - current_state.data[state_index];
-    state_variances[i] = state_covariance.data[varianceIndex(state_index)];
+  poseInnovations(unwrapped_now, current_state, state_covariance, innovations, state_variances);
+  for (std::size_t i = 0; i < measurement_variances.size(); ++i) {
     measurement_variances[i] = covariance_now.data[i];
   }
   if (!acceptsInnovation(
@@ -445,13 +449,13 @@ bool Filter::processPose(SourceState & source, const PoseSample & pose, Nanoseco
     const auto & r = covariance_now.data;
     logger_.log(
       LogLevel::INFO,
-      "Raw pose measurement (map frame, wrapped):"
-      "[x=%.3f, y=%.3f, z=%.3f, roll=%.3f, pitch=%.3f, yaw=%.3f]",
-      z[0], z[1], z[2], z[3], z[4], z[5]);
+      "Raw pose measurement (map frame):"
+      "[x=%.3f, y=%.3f, z=%.3f, qw=%.4f, qx=%.4f, qy=%.4f, qz=%.4f]",
+      z[0], z[1], z[2], z[3], z[4], z[5], z[6]);
     logger_.log(
       LogLevel::INFO,
       "Pose measurement covariance:"
-      "[c_x=%.6f, c_y=%.6f, c_z=%.6f, c_roll=%.6f, c_pitch=%.6f, c_yaw=%.6f]",
+      "[c_x=%.6f, c_y=%.6f, c_z=%.6f, c_rx=%.6f, c_ry=%.6f, c_rz=%.6f]",
       r[0], r[1], r[2], r[3], r[4], r[5]);
   }
 

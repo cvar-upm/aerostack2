@@ -93,7 +93,11 @@ ekf::PoseMeasurement makeMeasurement(
   double x, double y, double z,
   double roll = 0.0, double pitch = 0.0, double yaw = 0.0)
 {
-  return ekf::PoseMeasurement({x, y, z, roll, pitch, yaw});
+  const Eigen::Quaterniond q =
+    Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *
+    Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
+    Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX());
+  return ekf::PoseMeasurement({x, y, z, q.w(), q.x(), q.y(), q.z()});
 }
 
 ekf::PoseMeasurementCovariance makeMeasurementCovariance(double value)
@@ -489,17 +493,26 @@ TEST(EkfHistoryBufferTest, DelayedVelocityReproducesInOrderResult)
   }
 }
 
-TEST(UnwrapPoseMeasurementTest, UnwrapsAcrossPiBoundary)
+TEST(UnwrapPoseMeasurementTest, AlignsQuaternionAcrossPiBoundary)
 {
   ekf::State reference_state;
-  reference_state.data[ekf::State::YAW] = M_PI - 0.05;
+  const Eigen::Quaterniond state_q(Eigen::AngleAxisd(M_PI - 0.05, Eigen::Vector3d::UnitZ()));
+  reference_state.data[ekf::State::QW] = state_q.w();
+  reference_state.data[ekf::State::QZ] = state_q.z();
 
-  // Raw measurement wrapped to just past -pi (equivalent to +pi + 0.05).
+  // Raw measurement just past -pi (the same rotation as +pi + 0.05), on the other hemisphere
   const ekf::PoseMeasurement raw = makeMeasurement(0.0, 0.0, 0.0, 0.0, 0.0, -M_PI + 0.05);
 
-  const ekf::PoseMeasurement unwrapped = unwrapPoseMeasurement(raw, reference_state);
+  const ekf::PoseMeasurement aligned = unwrapPoseMeasurement(raw, reference_state);
 
-  EXPECT_NEAR(unwrapped.data[ekf::PoseMeasurement::YAW], M_PI + 0.05, 1e-9);
+  // Flipped to the state's hemisphere: the same rotation, 0.1 rad from the state's
+  const Eigen::Quaterniond q(
+    aligned.data[ekf::PoseMeasurement::QW], aligned.data[ekf::PoseMeasurement::QX],
+    aligned.data[ekf::PoseMeasurement::QY], aligned.data[ekf::PoseMeasurement::QZ]);
+  EXPECT_GT(q.dot(state_q), 0.0);
+  EXPECT_NEAR(aligned.data[ekf::PoseMeasurement::QW], -raw.data[ekf::PoseMeasurement::QW], 1e-12);
+  EXPECT_NEAR(aligned.data[ekf::PoseMeasurement::QZ], -raw.data[ekf::PoseMeasurement::QZ], 1e-12);
+  EXPECT_NEAR(2.0 * (q * state_q.conjugate()).vec().z(), 2.0 * std::sin(0.05), 1e-9);
 }
 
 

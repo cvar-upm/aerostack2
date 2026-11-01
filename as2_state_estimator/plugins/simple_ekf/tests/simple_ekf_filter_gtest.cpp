@@ -145,7 +145,7 @@ TEST(FilterPreflightTest, PullsTheStateTowardsTheConfiguredPose)
   EXPECT_NEAR(filter.state().data[ekf::State::X], 1.0, 1e-3);
   EXPECT_NEAR(filter.state().data[ekf::State::Y], -2.0, 1e-3);
   EXPECT_NEAR(filter.state().data[ekf::State::Z], 0.5, 1e-3);
-  EXPECT_NEAR(filter.state().data[ekf::State::YAW], 0.5, 1e-3);
+  EXPECT_NEAR(filter.state().get_orientation()[2], 0.5, 1e-3);
 }
 
 TEST(FilterPreflightTest, ALowerVariancePullsHarder)

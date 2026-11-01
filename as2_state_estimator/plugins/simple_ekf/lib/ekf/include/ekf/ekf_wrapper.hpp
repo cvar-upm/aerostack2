@@ -126,6 +126,9 @@ public:
 
   /**
    * @brief Process noise Q accumulated over one prediction step of length dt.
+   *
+   * The gyroscope noise enters the quaternion through q_dot = 0.5 q x [0, w], so its block
+   * depends on the current orientation.
    */
   Covariance compute_process_noise_covariance(double dt) const;
 
@@ -135,6 +138,13 @@ public:
   static Eigen::Matrix4d pose_to_transform(
     const Eigen::Vector3d & position,
     const Eigen::Vector3d & euler_rpy);
+
+  /**
+   * @brief Homogeneous transform from a position and a quaternion (qx, qy, qz, qw).
+   */
+  static Eigen::Matrix4d pose_to_transform(
+    const Eigen::Vector3d & position,
+    const std::array<double, 4> & quaternion_xyzw);
 
   /**
    * @brief map -> odom after a correction, moved by exactly as much as the correction moved
@@ -221,7 +231,7 @@ public:
     const VelocityMeasurementCovariance & measurement_noise_covariance);
 
   /**
-   * @brief Wrap roll, pitch and yaw to [-pi, pi).
+   * @brief Renormalize the orientation quaternion. The covariance is left as it is.
    */
   void correct_state();
 
