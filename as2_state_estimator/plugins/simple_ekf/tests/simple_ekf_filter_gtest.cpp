@@ -30,19 +30,22 @@
 * @file simple_ekf_filter_gtest.cpp
 *
 * Unit tests for simple_ekf_core::Filter, driven directly, without ROS: the pre-flight
-* correction, the repeated-position check and the guard against IMU stamp jumps, with their
-* defaults and configured values.
+* correction, the repeated-position check, the guard against IMU stamp jumps, with their
+* defaults and configured values, and the reset to a first map-frame pose.
 *
 * @authors Rodrigo Da Silva Gómez
 */
 
 #include <gtest/gtest.h>
 
+#include <Eigen/Dense>
+
 #include <cmath>
 
 #include <ekf/ekf_datatype.hpp>
 
 #include <simple_ekf_core/filter.hpp>
+#include <simple_ekf_core/measurement_utils.hpp>
 
 namespace simple_ekf_core
 {
@@ -417,6 +420,32 @@ TEST(FilterImuStampTest, AfterAJumpALatePoseIsReplayedAgainstTheNewHistoryOnly)
     kStart + 10 * kTick);
 
   expectSameState(jumped, steady);
+}
+
+// ---------------------------------------------------------------------------
+// First pose in the map frame
+// ---------------------------------------------------------------------------
+
+// The state is reset to the first map-frame pose. The configured orientation variance is
+// about each map axis whatever that pose's orientation, a half turn of yaw included.
+TEST(FilterFirstPoseTest, AMapFramePoseKeepsTheConfiguredOrientationVariance)
+{
+  Config config;
+  config.initial_orientation_covariance = 0.04;
+  Filter filter(config);
+  Quaternion rotation;
+  rotation.setRPY(0.2, -0.4, M_PI);
+  ASSERT_TRUE(
+    filter.setEarthToMapFromFirstPose(
+      Rigid(rotation, Vector3(1.0, 2.0, 0.5)), SourceFrame::MAP));
+
+  const Eigen::Matrix3d covariance =
+    orientationCovariance(filter.state(), filter.stateCovariance());
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      EXPECT_NEAR(covariance(i, j), i == j ? 0.04 : 0.0, 1e-12) << i << ", " << j;
+    }
+  }
 }
 
 }  // namespace simple_ekf_core

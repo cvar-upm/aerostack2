@@ -180,7 +180,11 @@ void Filter::resetStateToPose(const Rigid & pose_in_map)
   state.data[ekf::State::QX] = rotation.x();
   state.data[ekf::State::QY] = rotation.y();
   state.data[ekf::State::QZ] = rotation.z();
-  ekf_wrapper_.set_state(state);
+  // The covariance's orientation block was built for the old quaternion (the identity, before
+  // the first pose): carried over, it keeps its variance about each map axis
+  ekf_wrapper_.reset(
+    state, carryOrientationCovariance(
+      ekf_wrapper_.get_state_covariance(), ekf_wrapper_.get_state(), state));
   const std::array<double, 3> angles = state.get_orientation();
 
   // Start the smoothing from the new pose instead of blending away from a stale one

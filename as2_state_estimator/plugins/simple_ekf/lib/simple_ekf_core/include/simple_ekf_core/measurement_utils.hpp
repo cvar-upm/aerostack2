@@ -194,12 +194,72 @@ inline ekf::PoseMeasurement unwrapPoseMeasurement(
 }
 
 /**
+ * @brief How the state's quaternion moves under a small rotation about the map's axes
+ *
+ * Exp(dtheta) x q = q + E dtheta / 2. For a unit q, E^T E = I and E^T q = 0: E's columns are
+ * the three directions a unit quaternion can move in, and q itself, its length, is not one.
+ */
+inline Eigen::Matrix<double, 4, 3> rotationToQuaternionJacobian(const ekf::State & state)
+{
+  const auto [qx, qy, qz, qw] = state.get_orientation_quaternion();
+  Eigen::Matrix<double, 4, 3> E;
+  E << -qx, -qy, -qz,
+    qw, qz, -qy,
+    -qz, qw, qx,
+    qy, -qx, qw;
+  return E;
+}
+
+/**
+ * @brief The state's orientation covariance as rotations about the map's x, y and z axes
+ *
+ * 4 E^T P_qq E (@ref rotationToQuaternionJacobian). Whatever P_qq holds along the quaternion
+ * itself does not show here: nothing in the filter reads it.
+ */
+inline Eigen::Matrix3d orientationCovariance(
+  const ekf::State & state,
+  const ekf::Covariance & state_covariance)
+{
+  const Eigen::Matrix<double, 4, 3> E = rotationToQuaternionJacobian(state);
+  const Eigen::Map<const Eigen::Matrix<double, ekf::Covariance::rows, ekf::Covariance::cols,
+    Eigen::RowMajor>> P(state_covariance.data.data());
+  return 4.0 * E.transpose() * P.block<4, 4>(ekf::State::QW, ekf::State::QW) * E;
+}
+
+/**
+ * @brief The state covariance with its orientation carried from one quaternion to another
+ *
+ * The quaternion block holds rotations about the map's axes in the directions the quaternion
+ * it was built for can move in. Overwriting the quaternion alone, as a reset to a pose does,
+ * leaves the block describing the old orientation: from the identity to a yaw psi, the
+ * variance about z would read s cos^2(psi / 2), none at psi = pi, and the rest would sit along
+ * the new quaternion, where nothing reads it. T = E_to E_from^T keeps every orientation
+ * variance and cross-covariance about the map's axes and moves it to the new directions.
+ */
+inline ekf::Covariance carryOrientationCovariance(
+  const ekf::Covariance & state_covariance,
+  const ekf::State & from,
+  const ekf::State & to)
+{
+  using Matrix = Eigen::Matrix<double, ekf::Covariance::rows, ekf::Covariance::cols,
+      Eigen::RowMajor>;
+  Matrix T = Matrix::Identity();
+  T.block<4, 4>(ekf::State::QW, ekf::State::QW) =
+    rotationToQuaternionJacobian(to) * rotationToQuaternionJacobian(from).transpose();
+
+  ekf::Covariance carried;
+  Eigen::Map<Matrix>(carried.data.data()) =
+    T * Eigen::Map<const Matrix>(state_covariance.data.data()) * T.transpose();
+  return carried;
+}
+
+/**
  * @brief Each component of a pose measurement's innovation, and the state's variance along it
  *
  * Position: the difference and the position variances. Orientation: the rotation from the
  * state's quaternion to the measured one about the map's x, y and z axes,
  * 2 vec(q_meas x q_state^-1), the residual the update uses, and the state's variance about
- * those axes, 4 E^T P_qq E with q = q_state + E dtheta / 2.
+ * those axes (@ref orientationCovariance).
  *
  * @param aligned Measurement already on the state's hemisphere (@ref unwrapPoseMeasurement)
  */
@@ -222,16 +282,7 @@ inline void poseInnovations(
     aligned.data[ekf::PoseMeasurement::QW], aligned.data[ekf::PoseMeasurement::QX],
     aligned.data[ekf::PoseMeasurement::QY], aligned.data[ekf::PoseMeasurement::QZ]);
   const Eigen::Vector3d rotation = 2.0 * (q_meas * q_state.conjugate()).vec();
-
-  Eigen::Matrix<double, 4, 3> E;
-  E << -qx, -qy, -qz,
-    qw, qz, -qy,
-    -qz, qw, qx,
-    qy, -qx, qw;
-  const Eigen::Map<const Eigen::Matrix<double, ekf::Covariance::rows, ekf::Covariance::cols,
-    Eigen::RowMajor>> P(state_covariance.data.data());
-  const Eigen::Matrix3d rotation_covariance =
-    4.0 * E.transpose() * P.block<4, 4>(ekf::State::QW, ekf::State::QW) * E;
+  const Eigen::Matrix3d rotation_covariance = orientationCovariance(state, state_covariance);
 
   for (int i = 0; i < 3; ++i) {
     innovations[3 + i] = rotation[i];

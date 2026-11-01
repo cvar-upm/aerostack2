@@ -272,7 +272,7 @@ Allan variance analysis if you have them.
 | --- | --- | --- | --- |
 | `initial_covariance.position` | double | `0.0` | `x, y, z` |
 | `initial_covariance.velocity` | double | `0.0` | `vx, vy, vz` |
-| `initial_covariance.orientation` | double | `0.0` | Rotation about each axis, rad² (a quarter of it on `qx, qy, qz`) |
+| `initial_covariance.orientation` | double | `0.0` | Rotation about each `map` axis, rad², also after a reset to a first `map`-frame pose (a quarter of it on `qx, qy, qz` at the identity) |
 | `initial_covariance.bias_acc` | double | `1e-8` | Accelerometer bias |
 | `initial_covariance.bias_gyro` | double | `1e-8` | Gyroscope bias |
 

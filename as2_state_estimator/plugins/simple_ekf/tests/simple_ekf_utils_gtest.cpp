@@ -434,6 +434,86 @@ TEST(UtilsQuaternionAlignTest, NegativeSideToPositive)
 }
 
 // ---------------------------------------------------------------------------
+// Orientation covariance carried to a new quaternion
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+ekf::State stateWithRpy(double roll, double pitch, double yaw)
+{
+  tf2::Quaternion q;
+  q.setRPY(roll, pitch, yaw);
+  ekf::State state;
+  state.data[ekf::State::QW] = q.w();
+  state.data[ekf::State::QX] = q.x();
+  state.data[ekf::State::QY] = q.y();
+  state.data[ekf::State::QZ] = q.z();
+  return state;
+}
+
+using CovarianceMatrix = Eigen::Matrix<double, ekf::Covariance::rows, ekf::Covariance::cols,
+    Eigen::RowMajor>;
+
+Eigen::Map<const CovarianceMatrix> asMatrix(const ekf::Covariance & covariance)
+{
+  return Eigen::Map<const CovarianceMatrix>(covariance.data.data());
+}
+
+// Covariance of position x with the rotation about each map axis
+Eigen::RowVector3d positionRotationCovariance(
+  const ekf::State & state, const ekf::Covariance & covariance)
+{
+  return 2.0 * asMatrix(covariance).block<1, 4>(ekf::State::X, ekf::State::QW) *
+         simple_ekf_core::rotationToQuaternionJacobian(state);
+}
+
+}  // namespace
+
+// The initial covariance is built at the identity: variance s about each map axis, s / 4 on
+// qx, qy, qz, and here a cross term with x. Carried to any orientation, the variances and the
+// cross term about the map's axes stay as they were, nothing is left along the new quaternion
+// itself, and the blocks that are not the orientation's are untouched.
+TEST(UtilsOrientationCovarianceTest, CarriedToANewQuaternionKeepsTheVarianceAboutEachMapAxis)
+{
+  const double s = 0.04;
+  const ekf::State identity;
+  ekf::Covariance covariance;
+  covariance.data[ekf::Covariance::X] = 0.5;
+  for (const int state : {ekf::State::QX, ekf::State::QY, ekf::State::QZ}) {
+    covariance.data[simple_ekf_core::varianceIndex(state)] = s / 4.0;
+  }
+  covariance.data[ekf::State::X * ekf::Covariance::cols + ekf::State::QZ] = 0.002;
+  covariance.data[ekf::State::QZ * ekf::Covariance::cols + ekf::State::X] = 0.002;
+
+  for (const ekf::State & to : {stateWithRpy(0.0, 0.0, M_PI), stateWithRpy(0.4, -1.2, 2.5),
+      stateWithRpy(0.0, M_PI / 2.0, 0.3)})
+  {
+    const ekf::Covariance carried =
+      simple_ekf_core::carryOrientationCovariance(covariance, identity, to);
+
+    const Eigen::Matrix3d before = simple_ekf_core::orientationCovariance(identity, covariance);
+    const Eigen::Matrix3d after = simple_ekf_core::orientationCovariance(to, carried);
+    EXPECT_TRUE(after.isApprox(before, 1e-12)) << after;
+    EXPECT_TRUE(
+      positionRotationCovariance(to, carried).isApprox(
+        positionRotationCovariance(identity, covariance), 1e-12));
+
+    const auto [qx, qy, qz, qw] = to.get_orientation_quaternion();
+    const Eigen::Vector4d q(qw, qx, qy, qz);
+    EXPECT_NEAR(
+      (q.transpose() * asMatrix(carried).block<4, 4>(ekf::State::QW, ekf::State::QW) * q).value(),
+      0.0, 1e-15);
+    EXPECT_DOUBLE_EQ(carried.data[ekf::Covariance::X], 0.5);
+  }
+
+  // Left as it was, the block read at a yaw of pi has no variance about z at all
+  EXPECT_NEAR(
+    simple_ekf_core::orientationCovariance(stateWithRpy(0.0, 0.0, M_PI), covariance)(2, 2), 0.0,
+    1e-15);
+}
+
+// ---------------------------------------------------------------------------
 // Throttle
 // ---------------------------------------------------------------------------
 
