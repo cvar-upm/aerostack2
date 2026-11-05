@@ -565,7 +565,8 @@ void ObjectPerceptionBehavior::raw_image_callback(
 {
   cv_bridge::CvImageConstPtr cv_image;
   try {
-    cv_image = cv_bridge::toCvShare(image_msg, sensor_msgs::image_encodings::BGR8);
+    // Copy, not share: stages keep the frame after the message is freed
+    cv_image = cv_bridge::toCvCopy(image_msg, sensor_msgs::image_encodings::BGR8);
   } catch (const cv_bridge::Exception & e) {
     RCLCPP_ERROR_THROTTLE(
       this->get_logger(), *this->get_clock(), 5000,
