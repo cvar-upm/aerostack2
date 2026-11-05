@@ -14,6 +14,7 @@
       detector:
         plugin: "aruco" # Detection plugin to load
         input_source: "image" # Stage input: image | internal | external
+        receive_image: false # Also feed camera frames when input_source is internal | external
         publish_output: true # Publish the stage detections
         output_topic: "detections_data" # Topic for the stage detections
         enable_debug: true # Publish debug data (poses and plugin-specific topics)
