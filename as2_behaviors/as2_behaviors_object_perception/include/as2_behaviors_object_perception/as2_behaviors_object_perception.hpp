@@ -113,6 +113,8 @@ private:
     std::string input_stage;
     std::string input_topic;
     std::string output_topic;
+    // Also feed the camera frames to a stage whose input is detections
+    bool receive_image{false};
     bool publish_output{false};
     bool enable_debug{false};
     std::string debug_poses_topic;

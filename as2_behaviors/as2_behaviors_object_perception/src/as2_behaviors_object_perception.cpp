@@ -183,6 +183,7 @@ ObjectPerceptionBehavior::PipelineStage ObjectPerceptionBehavior::loadStage(
     this->get_namespace(), this->getParameter<std::string>(prefix + "input_topic", ""));
   stage.output_topic = as2_behaviors_object_perception::getNamespacedTopic(
     this->get_namespace(), this->getParameter<std::string>(prefix + "output_topic", ""));
+  stage.receive_image = this->getParameter<bool>(prefix + "receive_image", false);
   stage.publish_output = this->getParameter<bool>(prefix + "publish_output", false);
   stage.enable_debug = this->getParameter<bool>(prefix + "enable_debug", false);
   stage.debug_poses_topic = as2_behaviors_object_perception::getNamespacedTopic(
@@ -238,6 +239,11 @@ ObjectPerceptionBehavior::PipelineStage ObjectPerceptionBehavior::loadStage(
     RCLCPP_INFO(
       this->get_logger(), "Stage '%s' takes its input from '%s'",
       stage.name.c_str(), stage.input_topic.c_str());
+  }
+
+  if (stage.receive_image && stage.input_source != "image") {
+    RCLCPP_INFO(
+      this->get_logger(), "Stage '%s' also receives the camera frames", stage.name.c_str());
   }
 
   return stage;
@@ -321,7 +327,7 @@ void ObjectPerceptionBehavior::handleImageFrame(
   }
 
   for (auto & stage : pipeline_stages_) {
-    if (stage.input_source == "image") {
+    if (stage.input_source == "image" || stage.receive_image) {
       stage.plugin->image_callback(frame, header);
     }
   }
@@ -565,7 +571,8 @@ void ObjectPerceptionBehavior::raw_image_callback(
 {
   cv_bridge::CvImageConstPtr cv_image;
   try {
-    cv_image = cv_bridge::toCvShare(image_msg, sensor_msgs::image_encodings::BGR8);
+    // Copy, not share: stages keep the frame after the message is freed
+    cv_image = cv_bridge::toCvCopy(image_msg, sensor_msgs::image_encodings::BGR8);
   } catch (const cv_bridge::Exception & e) {
     RCLCPP_ERROR_THROTTLE(
       this->get_logger(), *this->get_clock(), 5000,

@@ -345,6 +345,10 @@ NB_MODULE(_simple_ekf_core, m) {
     "frame"_a)
   .def("set_offboard", &Filter::setOffboard, "offboard"_a)
   .def(
+    "set_imu_noise", &Filter::setImuNoise, "accelerometer_noise_density"_a,
+    "gyroscope_noise_density"_a, "accelerometer_random_walk"_a, "gyroscope_random_walk"_a,
+    "The IMU noise the prediction assumes from now on, in place of the configuration's.")
+  .def(
     "should_throttle_update", &Filter::shouldThrottleUpdate, "source"_a, "stamp"_a,
     "Whether a measurement comes too soon to respect the source's update_rate_hz.")
   .def(

@@ -128,6 +128,10 @@ public:
    *
    * The image has already been decompressed and optionally rectified.
    * Plugins store the frame and run inference in own_run().
+   *
+   * Called for image-input stages, and for detection-input stages with
+   * receive_image set. Frames arrive before the pipeline runs, so a stage can
+   * pair them with its input detections by header stamp.
    */
   virtual void image_callback(
     const cv::Mat & image,

@@ -94,11 +94,16 @@ UsbCameraInterface::UsbCameraInterface(as2::Node * node_ptr)
   // Whether the frames are saved: "save_images" at start, then the save_images service
   // (std_srvs/SetBool). Not saved, they are still read, published and handed on.
   save_images_ = node_ptr_->getParameter<bool>("save_images", true);
+  // In a group of its own: in the node's default one it waits for every other callback there,
+  // such as a host node's busy timer (seconds on Jazzy behind a 500 Hz behavior tick)
+  save_images_callback_group_ = node_ptr_->create_callback_group(
+    rclcpp::CallbackGroupType::MutuallyExclusive);
   save_images_service_ = node_ptr_->create_service<std_srvs::srv::SetBool>(
     "sensor_measurements/" + (camera_name_.empty() ? std::string("camera") : camera_name_) +
     "/save_images",
     std::bind(
-      &UsbCameraInterface::setSaveImages, this, std::placeholders::_1, std::placeholders::_2));
+      &UsbCameraInterface::setSaveImages, this, std::placeholders::_1, std::placeholders::_2),
+    rmw_qos_profile_services_default, save_images_callback_group_);
   if (!image_folder_.empty()) {
     RCLCPP_INFO(
       node_ptr_->get_logger(), "%s images to '%s'; %s switches it",

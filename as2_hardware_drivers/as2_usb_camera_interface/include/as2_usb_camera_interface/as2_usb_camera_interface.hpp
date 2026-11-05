@@ -144,6 +144,7 @@ private:
   // save_images service (std_srvs/SetBool)
   std::atomic<bool> save_images_{true};
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr save_images_service_;
+  rclcpp::CallbackGroup::SharedPtr save_images_callback_group_;
 
   void captureImage();
   void saveImages();
