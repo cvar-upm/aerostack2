@@ -126,6 +126,17 @@ public:
   void setOffboard(bool offboard);
 
   /**
+   * @brief The IMU noise the prediction assumes from now on, in place of the configuration's
+   *        (densities and random walks, as in Config): for samples of another origin, such as
+   *        ones modelled from the commands while the IMU is lost.
+   *
+   * A reset goes back to the configuration's.
+   */
+  void setImuNoise(
+    double accelerometer_noise_density, double gyroscope_noise_density,
+    double accelerometer_random_walk, double gyroscope_random_walk);
+
+  /**
    * @brief Whether the drone has ever been offboard, which is when the pre-flight correction
    *        stopped for good.
    */

@@ -206,6 +206,15 @@ void Filter::setOffboard(bool offboard)
   drone_has_been_offboard_ = drone_has_been_offboard_ || offboard;
 }
 
+void Filter::setImuNoise(
+  double accelerometer_noise_density, double gyroscope_noise_density,
+  double accelerometer_random_walk, double gyroscope_random_walk)
+{
+  ekf_wrapper_.set_noise_parameters(
+    Eigen::Vector<double, 6>::Zero(), accelerometer_noise_density, gyroscope_noise_density,
+    accelerometer_random_walk, gyroscope_random_walk);
+}
+
 bool Filter::shouldThrottleUpdate(SourceId source_id, Nanoseconds stamp)
 {
   SourceState & source = sources_.at(source_id);
