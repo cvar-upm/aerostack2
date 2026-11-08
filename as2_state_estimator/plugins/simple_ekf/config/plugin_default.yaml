@@ -45,6 +45,7 @@
       earth_map_transform: # By default, the plugin will set the earth to map transform on the first received pose.
         static_tf: true  # Publish earth to map as tf_static (true) or dynamic tf (false).
         set_earth_map: false  # Manually set earth to map transform if true.
+        fix_map_attitude: true  # The first pose (in earth) gives the map only its position and yaw, level with gravity. False: its roll and pitch too.
         position:
           x: 0.0
           y: 0.0

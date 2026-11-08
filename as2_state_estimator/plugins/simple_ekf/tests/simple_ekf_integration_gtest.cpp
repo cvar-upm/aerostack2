@@ -249,7 +249,7 @@ static std::vector<std::string> mocapUpdateTopicOverrides()
 }
 
 // Mocap poses are treated as being in the earth frame, so the first accepted rigid body
-// pose becomes the earth→map transform verbatim.
+// pose sets the earth→map transform.
 TEST(SimpleEkfIntegrationTest, Mocap_ValidPose_SetsEarthToMapToPose)
 {
   const std::string ns = "test_mocap_valid";
@@ -499,9 +499,9 @@ TEST(SimpleEkfIntegrationTest, PoseWithCovariance_SetsEarthToMapAsInverseOfPose)
   EXPECT_NEAR(earth_to_map.transform.translation.z, -6.0, 1e-6);
 }
 
-// A first pose already expressed in the earth frame is taken verbatim as earth→map,
+// A first pose already expressed in the earth frame gives earth→map its position and yaw,
 // unlike a map-frame pose which is inverted (setEarthToMapFromFirstPose's other branch).
-TEST(SimpleEkfIntegrationTest, PoseStamped_EarthFrame_SetsEarthToMapVerbatim)
+TEST(SimpleEkfIntegrationTest, PoseStamped_EarthFrame_SetsEarthToMapFromIt)
 {
   const std::string ns = "test_pose_earth";
   auto node = getSimpleEkfNode(ns);
@@ -547,6 +547,60 @@ TEST(SimpleEkfIntegrationTest, PoseStamped_EarthFrame_SetsEarthToMapVerbatim)
   EXPECT_NEAR(earth_to_map.transform.translation.x, 7.0, 1e-6);
   EXPECT_NEAR(earth_to_map.transform.translation.y, 8.0, 1e-6);
   EXPECT_NEAR(earth_to_map.transform.translation.z, 9.0, 1e-6);
+}
+
+// The earth→map a node takes from a first pose in the earth frame, rolled 0.1 rad.
+static geometry_msgs::msg::TransformStamped earthToMapFromRolledFirstPose(
+  const std::string & ns, const std::vector<std::string> & extra_param_overrides = {})
+{
+  auto node = getSimpleEkfNode(ns, extra_param_overrides);
+  auto pub_node = rclcpp::Node::make_shared(ns + "_pub");
+  auto pose_pub = pub_node->create_publisher<geometry_msgs::msg::PoseStamped>(
+    "/" + ns + "/ground_truth/pose", rclcpp::SensorDataQoS());
+
+  auto tf_node = rclcpp::Node::make_shared(ns + "_tf_listener");
+  auto tf_buffer = std::make_shared<tf2_ros::Buffer>(tf_node->get_clock());
+  auto tf_listener = std::make_shared<tf2_ros::TransformListener>(*tf_buffer, tf_node, false);
+
+  rclcpp::executors::MultiThreadedExecutor exec;
+  exec.add_node(node);
+  exec.add_node(pub_node);
+  exec.add_node(tf_node);
+  spinSome(exec, 30);
+
+  const std::string map_frame = ns + "/map";
+
+  geometry_msgs::msg::PoseStamped pose;
+  pose.header.frame_id = "earth";
+  pose.pose.orientation.x = std::sin(0.05);
+  pose.pose.orientation.w = std::cos(0.05);
+
+  bool tf_available = false;
+  auto deadline = pub_node->now() + rclcpp::Duration(2, 0);
+  while (!tf_available && pub_node->now() < deadline) {
+    pose.header.stamp = pub_node->now();
+    pose_pub->publish(pose);
+    spinSome(exec, 5);
+    tf_available = tf_buffer->canTransform("earth", map_frame, tf2::TimePointZero);
+  }
+
+  EXPECT_TRUE(tf_available) << "earth→map TF should be available after the first pose message";
+  return tf_buffer->lookupTransform("earth", map_frame, tf2::TimePointZero);
+}
+
+TEST(SimpleEkfIntegrationTest, PoseStamped_EarthFrame_FixMapAttitudeIsOnByDefault)
+{
+  const auto earth_to_map = earthToMapFromRolledFirstPose("test_fix_map_attitude_default");
+  EXPECT_NEAR(earth_to_map.transform.rotation.x, 0.0, 1e-6);
+  EXPECT_NEAR(earth_to_map.transform.rotation.w, 1.0, 1e-6);
+}
+
+TEST(SimpleEkfIntegrationTest, PoseStamped_EarthFrame_FixMapAttitudeOffKeepsTheRoll)
+{
+  const auto earth_to_map = earthToMapFromRolledFirstPose(
+    "test_fix_map_attitude_off", {"simple_ekf.earth_map_transform.fix_map_attitude:=false"});
+  EXPECT_NEAR(earth_to_map.transform.rotation.x, std::sin(0.05), 1e-6);
+  EXPECT_NEAR(earth_to_map.transform.rotation.w, std::cos(0.05), 1e-6);
 }
 
 // setEarthToMapFromFirstPose only accepts the earth and map frames; anything else is refused.

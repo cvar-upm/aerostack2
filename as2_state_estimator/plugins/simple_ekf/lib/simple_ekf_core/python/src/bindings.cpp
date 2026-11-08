@@ -228,6 +228,7 @@ NB_MODULE(_simple_ekf_core, m) {
   .def_rw("max_imu_dt_ms", &Config::max_imu_dt_ms)
   .def_rw("unobserved_variance", &Config::unobserved_variance)
   .def_rw("map_odom_alpha", &Config::map_odom_alpha)
+  .def_rw("fix_map_attitude", &Config::fix_map_attitude)
   .def_rw("preflight_pose", &Config::preflight_pose)
   .def_rw("preflight_variance", &Config::preflight_variance)
   .def_rw("verbose", &Config::verbose)

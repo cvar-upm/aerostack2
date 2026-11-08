@@ -226,6 +226,10 @@ struct Config
   /// Weight of the newest raw map->odom in the published one, per tick. 1 disables smoothing
   double map_odom_alpha = 0.1;
 
+  /// Whether earth->map takes only the position and yaw of the earth-frame pose that sets it.
+  /// Its roll and pitch would tilt the map, along whose z the filter's gravity is
+  bool fix_map_attitude = true;
+
   /// Pre-flight correction: until the drone first goes offboard, every tick corrects the
   /// state towards this pose, in the map frame, with this variance on every component. By
   /// default it asserts that the drone sits at the map origin

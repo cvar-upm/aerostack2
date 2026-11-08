@@ -157,6 +157,13 @@ bool Filter::setEarthToMapFromFirstPose(const Rigid & pose, SourceFrame frame)
   switch (frame) {
     case SourceFrame::EARTH:
       outputs_.earth_to_map = pose;
+      if (config_.fix_map_attitude) {
+        // The filter's gravity is along the map's z, so the map is level with the earth: the
+        // first pose gives it a place and a heading, and its roll and pitch would tilt it
+        Quaternion heading;
+        heading.setRPY(0.0, 0.0, toRollPitchYaw(pose.getRotation())[2]);
+        outputs_.earth_to_map.setRotation(heading);
+      }
       return true;
     case SourceFrame::MAP:
       outputs_.earth_to_map = pose.inverse();
