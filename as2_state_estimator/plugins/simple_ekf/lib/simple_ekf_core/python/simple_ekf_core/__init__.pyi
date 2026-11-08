@@ -75,6 +75,8 @@ class Config:
     unobserved_variance: float
     # Weight of the newest raw map->odom in the published one, per tick. 1 disables smoothing
     map_odom_alpha: float
+    # Whether earth->map takes only the position and yaw of the earth-frame pose that sets it
+    fix_map_attitude: bool
     # Until the drone first goes offboard, every tick corrects the state towards this pose, in the
     # map frame, with this variance on every component
     preflight_pose: Transform

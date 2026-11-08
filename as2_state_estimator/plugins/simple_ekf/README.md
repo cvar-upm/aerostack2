@@ -285,6 +285,7 @@ the drone genuinely starts at the origin of its own `map` frame.
 | --- | --- | --- | --- |
 | `earth_map_transform.static_tf` | bool | `true` | Publish `earth -> map` on `/tf_static` rather than republishing it on `/tf` at `timer_hz` |
 | `earth_map_transform.set_earth_map` | bool | `false` | Pin `earth -> map` from parameters |
+| `earth_map_transform.fix_map_attitude` | bool | `true` | When a topic's first pose, in the earth frame, sets `earth -> map`, take only its position and yaw: the filter's gravity is along the map's z. `false` takes its roll and pitch too |
 | `earth_map_transform.position.{x,y,z}` | double | `0.0` | Position of `map` in `earth`, metres |
 | `earth_map_transform.orientation.{roll,pitch,yaw}` | double | `0.0` | Orientation of `map` in `earth`, radians |
 
@@ -300,7 +301,7 @@ Each name in `update_topics` refers to a sibling block:
 | --- | --- | --- | --- |
 | `topic` | string | yes | Topic to subscribe to |
 | `type` | string | yes | One of `geometry_msgs/msg/PoseStamped`, `geometry_msgs/msg/PoseWithCovarianceStamped`, `nav_msgs/msg/Odometry`, `mocap4r2_msgs/msg/RigidBodies`, `geometry_msgs/msg/TwistWithCovarianceStamped` |
-| `set_earth_map` | bool | yes | Bootstrap `earth -> map` from this topic's first message |
+| `set_earth_map` | bool | yes | Bootstrap `earth -> map` from this topic's first message, see `earth_map_transform.fix_map_attitude` |
 | `use_message_covariance` | bool | yes | Use the message's covariance (scaled by the multipliers) instead of fixed values |
 | `position_covariance` | double[3] | when `use_message_covariance` is false | Fixed variances for `x, y, z` |
 | `orientation_covariance` | double[3] | when `use_message_covariance` is false | Fixed variances for the rotation about `map` x, y, z |

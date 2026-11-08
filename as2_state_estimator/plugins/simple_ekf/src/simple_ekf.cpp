@@ -198,6 +198,8 @@ simple_ekf_core::Config Plugin::readFilterConfig()
   config.max_imu_dt_ms = node_ptr_->getParameter<double>(
     "simple_ekf.max_imu_dt_ms", config.max_imu_dt_ms);
   config.map_odom_alpha = get("map_odom_alpha");
+  config.fix_map_attitude = node_ptr_->getParameter<bool>(
+    "simple_ekf.earth_map_transform.fix_map_attitude", config.fix_map_attitude);
   config.verbose = verbose_;
   config.debug_verbose = debug_verbose_;
 

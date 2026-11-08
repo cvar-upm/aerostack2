@@ -448,4 +448,47 @@ TEST(FilterFirstPoseTest, AMapFramePoseKeepsTheConfiguredOrientationVariance)
   }
 }
 
+// ---------------------------------------------------------------------------
+// First pose in the earth frame
+// ---------------------------------------------------------------------------
+
+// The filter's gravity is along the map's z: the first pose places the map and heads it, and
+// the drone's tilt, or the error of that one pose, stays out of earth->map.
+TEST(FilterFirstPoseTest, AnEarthFramePoseLeavesTheMapLevel)
+{
+  Filter filter{Config()};
+  Quaternion rotation;
+  rotation.setRPY(0.05, -0.03, 1.2);
+  ASSERT_TRUE(
+    filter.setEarthToMapFromFirstPose(
+      Rigid(rotation, Vector3(1.0, 2.0, 0.5)), SourceFrame::EARTH));
+
+  const Rigid & earth_to_map = filter.outputs().earth_to_map;
+  const std::array<double, 3> angles = toRollPitchYaw(earth_to_map.getRotation());
+  EXPECT_NEAR(angles[0], 0.0, 1e-12);
+  EXPECT_NEAR(angles[1], 0.0, 1e-12);
+  EXPECT_NEAR(angles[2], 1.2, 1e-12);
+  EXPECT_NEAR(earth_to_map.getOrigin().x(), 1.0, 1e-12);
+  EXPECT_NEAR(earth_to_map.getOrigin().y(), 2.0, 1e-12);
+  EXPECT_NEAR(earth_to_map.getOrigin().z(), 0.5, 1e-12);
+}
+
+TEST(FilterFirstPoseTest, WithoutFixMapAttitudeAnEarthFramePoseIsUsedAsItIs)
+{
+  Config config;
+  config.fix_map_attitude = false;
+  Filter filter(config);
+  Quaternion rotation;
+  rotation.setRPY(0.05, -0.03, 1.2);
+  ASSERT_TRUE(
+    filter.setEarthToMapFromFirstPose(
+      Rigid(rotation, Vector3(1.0, 2.0, 0.5)), SourceFrame::EARTH));
+
+  const std::array<double, 3> angles =
+    toRollPitchYaw(filter.outputs().earth_to_map.getRotation());
+  EXPECT_NEAR(angles[0], 0.05, 1e-12);
+  EXPECT_NEAR(angles[1], -0.03, 1e-12);
+  EXPECT_NEAR(angles[2], 1.2, 1e-12);
+}
+
 }  // namespace simple_ekf_core

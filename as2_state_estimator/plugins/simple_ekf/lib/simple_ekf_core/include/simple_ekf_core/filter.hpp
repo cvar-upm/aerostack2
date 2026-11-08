@@ -110,7 +110,9 @@ public:
   /**
    * @brief Set earth->map from the first pose a source reports.
    *
-   * A pose in the earth frame is used as it is. A pose in the map frame is the vehicle's,
+   * A pose in the earth frame gives the map its position and heading: with
+   * Config::fix_map_attitude its roll and pitch are dropped, as the filter's gravity is along
+   * the map's z; without it, it is used as it is. A pose in the map frame is the vehicle's,
    * so earth->map is its inverse, and the state starts from it so that the first correction
    * is not a jump. Any other frame sets nothing.
    *
