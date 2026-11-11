@@ -53,6 +53,7 @@
 #include <vector>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <string>
 #include <thread>
@@ -117,8 +118,17 @@ private:
   as2::Node * node_ptr_;
   std::shared_ptr<as2::sensors::Camera> camera_;
   cv::VideoCapture cap_;
-  rclcpp::TimerBase::SharedPtr image_capture_timer_;
-  rclcpp::CallbackGroup::SharedPtr capture_callback_group_;
+  // The camera is read at its own pace in capture_thread_; process_thread_ remaps, saves and
+  // hands on the newest frame read, so a slow step there never makes a read miss a frame.
+  // captured_mutex_ guards captured_ and frames_replaced_.
+  std::thread capture_thread_;
+  std::thread process_thread_;
+  std::atomic<bool> stop_capture_{false};
+  std::mutex captured_mutex_;
+  std::condition_variable captured_cv_;
+  std::optional<CameraFrame> captured_;
+  uint64_t frames_replaced_{0};
+  double framerate_{0.0};
 
   as2_usb_camera_interface::MutexQueue<CameraFrame> output_queue_{1};
   sensor_msgs::msg::CameraInfo camera_info_;
@@ -146,7 +156,9 @@ private:
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr save_images_service_;
   rclcpp::CallbackGroup::SharedPtr save_images_callback_group_;
 
-  void captureImage();
+  void captureLoop();
+  void processLoop();
+  void processFrame(CameraFrame & camera_frame);
   void saveImages();
   void setSaveImages(
     const std::shared_ptr<std_srvs::srv::SetBool::Request> request,

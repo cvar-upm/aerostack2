@@ -38,6 +38,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cinttypes>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -111,25 +112,33 @@ UsbCameraInterface::UsbCameraInterface(as2::Node * node_ptr)
       save_images_service_->get_service_name());
   }
 
-  // The camera runs at "framerate"; frames are read and published at "read_freq".
+  // The camera runs at "framerate" and is read at that pace in a thread of its own; at most
+  // "read_freq" frames a second go on. A second thread remaps, saves and hands them on, so a slow
+  // step there never makes a read miss a frame.
   if (read_freq_ <= 0.0) {
     RCLCPP_ERROR(
       node_ptr_->get_logger(),
       "read_freq must be > 0: set read_freq (or framerate). No images will be read");
     return;
   }
-  const int64_t milliseconds_from_read_freq =
-    static_cast<int64_t>(1000.0 / read_freq_);
-  capture_callback_group_ = node_ptr_->create_callback_group(
-    rclcpp::CallbackGroupType::MutuallyExclusive);
-  image_capture_timer_ = node_ptr_->create_timer(
-    std::chrono::milliseconds(milliseconds_from_read_freq),
-    std::bind(&UsbCameraInterface::captureImage, this),
-    capture_callback_group_);
+  capture_thread_ = std::thread(&UsbCameraInterface::captureLoop, this);
+  process_thread_ = std::thread(&UsbCameraInterface::processLoop, this);
 }
 
 UsbCameraInterface::~UsbCameraInterface()
 {
+  {
+    std::lock_guard<std::mutex> lock(captured_mutex_);
+    stop_capture_ = true;
+  }
+  captured_cv_.notify_all();
+  // The read returns within a frame, so the capture thread ends
+  if (capture_thread_.joinable()) {
+    capture_thread_.join();
+  }
+  if (process_thread_.joinable()) {
+    process_thread_.join();
+  }
   {
     std::lock_guard<std::mutex> lock(images_to_save_mutex_);
     stop_image_writers_ = true;
@@ -154,6 +163,7 @@ void UsbCameraInterface::setupCamera()
   arducam = node_ptr_->getParameter<bool>("arducam");
   device_port = node_ptr_->getParameter<std::string>("device");
   framerate = node_ptr_->getParameter<double>("framerate", 0.0);
+  framerate_ = framerate;
   // "read_freq" is "framerate" when it is not set.
   read_freq_ = node_ptr_->getParameter<double>("read_freq", framerate);
   image_height = node_ptr_->getParameter<int>("image_height");
@@ -325,28 +335,93 @@ void UsbCameraInterface::setupNominalCamera()
     "CPU");
 }
 
-void UsbCameraInterface::captureImage()
+void UsbCameraInterface::captureLoop()
 {
-  cv::Mat frame;
-  if (!cap_.read(frame)) {
-    RCLCPP_ERROR(node_ptr_->get_logger(), "Cannot read image");
-    return;
-  }
+  // Below the camera's rate, only the frames due at read_freq go on; at or above it, every one
+  const bool every_frame = framerate_ <= 0.0 || read_freq_ >= framerate_;
+  const double period_s = 1.0 / read_freq_;
+  const double half_frame_s = framerate_ > 0.0 ? 0.5 / framerate_ : 0.0;
+  double next_due_s = 0.0;
+  auto replaced_since = std::chrono::steady_clock::now();
+  while (!stop_capture_) {
+    cv::Mat frame;
+    if (!cap_.read(frame)) {
+      if (stop_capture_) {
+        break;
+      }
+      RCLCPP_ERROR_THROTTLE(
+        node_ptr_->get_logger(), *node_ptr_->get_clock(), 1000, "Cannot read image");
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      continue;
+    }
 
-  // Stamped right after the read, so the stamp is not delayed by the remap or by publishing, and
-  // corrected by timestamp_offset to when the image was really taken.
-  CameraFrame camera_frame;
-  camera_frame.header.stamp = node_ptr_->now() + timestamp_offset_;
-  camera_frame.header.frame_id = as2::tf::generateTfName(
-    node_ptr_->get_namespace(), camera_name_ + "/camera_link");
+    // Stamped right after the read, so the stamp is not delayed by the remap or by publishing,
+    // and corrected by timestamp_offset to when the image was really taken.
+    CameraFrame camera_frame;
+    camera_frame.header.stamp = node_ptr_->now() + timestamp_offset_;
+    camera_frame.header.frame_id = as2::tf::generateTfName(
+      node_ptr_->get_namespace(), camera_name_ + "/camera_link");
+    if (!every_frame) {
+      const double stamp_s = rclcpp::Time(camera_frame.header.stamp).seconds();
+      if (stamp_s < next_due_s - half_frame_s) {
+        continue;
+      }
+      next_due_s = stamp_s - next_due_s > period_s ? stamp_s + period_s : next_due_s + period_s;
+    }
+    camera_frame.image = std::move(frame);
+
+    {
+      std::lock_guard<std::mutex> lock(captured_mutex_);
+      frames_replaced_ += captured_.has_value() ? 1 : 0;
+      captured_ = std::move(camera_frame);
+    }
+    captured_cv_.notify_one();
+
+    const auto now = std::chrono::steady_clock::now();
+    if (now - replaced_since >= std::chrono::seconds(5)) {
+      uint64_t replaced = 0;
+      {
+        std::lock_guard<std::mutex> lock(captured_mutex_);
+        std::swap(replaced, frames_replaced_);
+      }
+      if (replaced > 0) {
+        RCLCPP_WARN(
+          node_ptr_->get_logger(),
+          "%" PRIu64 " frames read in the last 5 s were replaced before being remapped and "
+          "handed on: that step is falling behind the camera", replaced);
+      }
+      replaced_since = now;
+    }
+  }
+}
+
+void UsbCameraInterface::processLoop()
+{
+  while (true) {
+    CameraFrame camera_frame;
+    {
+      std::unique_lock<std::mutex> lock(captured_mutex_);
+      captured_cv_.wait(lock, [this] {return stop_capture_ || captured_.has_value();});
+      if (!captured_.has_value()) {
+        return;  // Stopping
+      }
+      camera_frame = std::move(*captured_);
+      captured_.reset();
+    }
+    processFrame(camera_frame);
+  }
+}
+
+void UsbCameraInterface::processFrame(CameraFrame & camera_frame)
+{
   if (nominal_remap_.enabled()) {
     const bool was_on_gpu = nominal_remap_.onGpu();
-    nominal_remap_.apply(frame, camera_frame.image);
+    cv::Mat remapped;
+    nominal_remap_.apply(camera_frame.image, remapped);
+    camera_frame.image = remapped;
     if (was_on_gpu && !nominal_remap_.onGpu()) {
       RCLCPP_ERROR(node_ptr_->get_logger(), "%s", nominal_remap_.gpuError().c_str());
     }
-  } else {
-    camera_frame.image = frame;
   }
 
   if (!image_folder_.empty() && save_images_) {
