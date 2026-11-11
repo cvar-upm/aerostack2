@@ -520,7 +520,8 @@ bool UsbCameraInterface::readArgus(cv::Mat & frame, int64_t & sensor_ns, std::st
     return false;
   }
   frame = argus_frame.bgr;
-  sensor_ns = argus_frame.sensor_time_valid ? argus_frame.sensor_ns : -1;
+  // On the camera's frame grid: Argus's own sensor times are now and then late under load
+  sensor_ns = argus_frame.sensor_time_valid ? argus_frame.grid_ns : -1;
   // A gap in Argus's frame numbers is frames not read (they start again if the camera reopens)
   if (have_frame_number_ && argus_frame.number > last_frame_number_) {
     frames_lost_ += argus_frame.number - last_frame_number_ - 1;
