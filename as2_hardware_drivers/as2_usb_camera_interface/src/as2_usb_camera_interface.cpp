@@ -54,6 +54,15 @@
 
 #include "as2_core/utils/tf_utils.hpp"
 
+#if defined(AS2_USB_CAMERA_INTERFACE_ARGUS)
+#include "as2_argus_capture/argus_capture.hpp"
+#else
+namespace as2_argus_capture
+{
+class ArgusCapture {};  // Built without it: never created
+}  // namespace as2_argus_capture
+#endif
+
 namespace usb_camera_interface
 {
 
@@ -69,6 +78,16 @@ std::set<pid_t> processThreads()
     threads.insert(static_cast<pid_t>(std::stoi(entry.path().filename().string())));
   }
   return threads;
+}
+
+// argus: longest wait for a frame, and how many frames' delays are logged at the start
+constexpr int64_t kArgusTimeoutNs = 1000000000;
+constexpr size_t kArgusWaitsLogged = 300;
+
+int64_t steadyNs()
+{
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+    std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 std::string threadName(pid_t thread)
@@ -244,6 +263,44 @@ void UsbCameraInterface::setupCamera()
     const int aeantibanding = node_ptr_->getParameter<int>("aeantibanding", 1);
     const double saturation = node_ptr_->getParameter<double>("saturation", 1.0);
 
+    // argus: read with Argus directly (as2_argus_capture), so each frame is stamped with its
+    // sensor time: when it started coming out of the sensor, stamped by the capture hardware
+    if (node_ptr_->getParameter<bool>("argus", false)) {
+#if defined(AS2_USB_CAMERA_INTERFACE_ARGUS)
+      as2_argus_capture::Settings settings;
+      // "device" as nvarguscamerasrc's sensor-id: a number, or the one ending a path
+      const size_t number = device_port.find_last_not_of("0123456789") + 1;
+      settings.sensor_id = number < device_port.size() ? std::stoi(device_port.substr(number)) : 0;
+      settings.width = image_width;
+      settings.height = image_height;
+      settings.framerate = framerate;
+      settings.exposure_ns = exposure_range;
+      settings.gain = static_cast<float>(gain);
+      settings.exposure_compensation = static_cast<float>(exposure_recompensation);
+      settings.ae_lock = aelock;
+      settings.awb_lock = awblock;
+      settings.wb_mode = wbmode;
+      settings.ae_antibanding = aeantibanding;
+      settings.saturation = static_cast<float>(saturation);
+      argus_ = std::make_unique<as2_argus_capture::ArgusCapture>();
+      std::string text;
+      if (argus_->open(settings, text)) {
+        RCLCPP_INFO(
+          node_ptr_->get_logger(), "argus: camera %d, %s; frames stamped with their sensor time",
+          settings.sensor_id, text.c_str());
+        RCLCPP_INFO(node_ptr_->get_logger(), "Camera capture setup complete");
+        return;
+      }
+      RCLCPP_ERROR(
+        node_ptr_->get_logger(), "argus: %s. Reading through GStreamer instead", text.c_str());
+      argus_.reset();
+#else
+      RCLCPP_ERROR(
+        node_ptr_->get_logger(),
+        "argus: built without as2_argus_capture (Jetson only). Reading through GStreamer instead");
+#endif
+    }
+
     std::string source = "nvarguscamerasrc sensor-id=" + device_port;
     if (exposure_recompensation != 0.0) {
       source += " exposurecompensation=" + std::to_string(exposure_recompensation);
@@ -391,20 +448,28 @@ void UsbCameraInterface::captureLoop()
   auto replaced_since = std::chrono::steady_clock::now();
   while (!stop_capture_) {
     cv::Mat frame;
-    if (!cap_.read(frame)) {
+    // With argus, when the frame started coming out of the sensor (steady clock); -1 without
+    int64_t sensor_ns = -1;
+    std::string error;
+    if (!(argus_ ? readArgus(frame, sensor_ns, error) : cap_.read(frame))) {
       if (stop_capture_) {
         break;
       }
       RCLCPP_ERROR_THROTTLE(
-        node_ptr_->get_logger(), *node_ptr_->get_clock(), 1000, "Cannot read image");
+        node_ptr_->get_logger(), *node_ptr_->get_clock(), 1000, "Cannot read image%s%s",
+        error.empty() ? "" : ": ", error.c_str());
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
     }
 
     // Stamped right after the read, so the stamp is not delayed by the remap or by publishing,
-    // and corrected by timestamp_offset to when the image was really taken.
+    // and corrected by timestamp_offset to when the image was really taken. With argus, back to
+    // its sensor time (both clocks read together), so the read's delay and jitter stay out.
     CameraFrame camera_frame;
-    camera_frame.header.stamp = node_ptr_->now() + timestamp_offset_;
+    const rclcpp::Time read_time = node_ptr_->now();
+    const int64_t wait_ns = sensor_ns >= 0 ? steadyNs() - sensor_ns : 0;
+    camera_frame.header.stamp =
+      read_time - rclcpp::Duration::from_nanoseconds(wait_ns) + timestamp_offset_;
     camera_frame.header.frame_id = as2::tf::generateTfName(
       node_ptr_->get_namespace(), camera_name_ + "/camera_link");
     if (!every_frame) {
@@ -436,9 +501,52 @@ void UsbCameraInterface::captureLoop()
           "%" PRIu64 " frames read in the last 5 s were replaced before being remapped and "
           "handed on: that step is falling behind the camera", replaced);
       }
+      if (frames_lost_ > 0) {
+        RCLCPP_WARN(
+          node_ptr_->get_logger(), "%" PRIu64 " frames the camera sent in the last 5 s were not "
+          "read", frames_lost_);
+        frames_lost_ = 0;
+      }
       replaced_since = now;
     }
   }
+}
+
+bool UsbCameraInterface::readArgus(cv::Mat & frame, int64_t & sensor_ns, std::string & error)
+{
+#if defined(AS2_USB_CAMERA_INTERFACE_ARGUS)
+  as2_argus_capture::Frame argus_frame;
+  if (!argus_->read(argus_frame, kArgusTimeoutNs, error)) {
+    return false;
+  }
+  frame = argus_frame.bgr;
+  sensor_ns = argus_frame.sensor_time_valid ? argus_frame.sensor_ns : -1;
+  // A gap in Argus's frame numbers is frames not read (they start again if the camera reopens)
+  if (have_frame_number_ && argus_frame.number > last_frame_number_) {
+    frames_lost_ += argus_frame.number - last_frame_number_ - 1;
+  }
+  last_frame_number_ = argus_frame.number;
+  have_frame_number_ = true;
+  if (sensor_ns >= 0 && argus_waits_ns_.size() < kArgusWaitsLogged) {
+    argus_waits_ns_.push_back(steadyNs() - sensor_ns);
+    if (argus_waits_ns_.size() == kArgusWaitsLogged) {
+      std::vector<int64_t> waits = argus_waits_ns_;
+      std::sort(waits.begin(), waits.end());
+      RCLCPP_INFO(
+        node_ptr_->get_logger(),
+        "argus: sensor time %s; over the first %zu frames, read %.1f ms (median) after it, %.1f "
+        "to %.1f ms", argus_->sensorClock().c_str(), waits.size(),
+        waits[waits.size() / 2] * 1e-6, waits.front() * 1e-6,
+        waits[waits.size() * 95 / 100] * 1e-6);
+    }
+  }
+  return true;
+#else
+  static_cast<void>(frame);
+  static_cast<void>(sensor_ns);
+  error = "built without as2_argus_capture";
+  return false;
+#endif
 }
 
 void UsbCameraInterface::setRealtimePriority(

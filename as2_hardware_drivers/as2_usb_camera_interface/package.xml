@@ -19,6 +19,8 @@
   <depend>std_srvs</depend>
   <depend>sensor_msgs</depend>
   <depend>cv_bridge</depend>
+  <!-- Optional: the argus backend, built only when the package is there (Jetsons) -->
+  <depend>as2_argus_capture</depend>
 
   <test_depend>ament_lint_common</test_depend>
   <test_depend>ament_lint_auto</test_depend>

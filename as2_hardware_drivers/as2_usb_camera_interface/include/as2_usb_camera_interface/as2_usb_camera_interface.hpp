@@ -77,6 +77,10 @@
 #include "as2_usb_camera_interface/common.hpp"
 #include "as2_usb_camera_interface/nominal_remap.hpp"
 
+namespace as2_argus_capture
+{
+class ArgusCapture;  // The argus backend, from as2_argus_capture when built with it
+}  // namespace as2_argus_capture
 
 namespace usb_camera_interface
 {
@@ -131,6 +135,14 @@ private:
   std::optional<CameraFrame> captured_;
   uint64_t frames_replaced_{0};
   double framerate_{0.0};
+  // argus (arducam): the camera read with Argus directly, each frame stamped with its sensor time.
+  // Used by the capture thread only: Argus's frame numbers, to count the frames not read, and the
+  // first frames' delay after their sensor time, logged once.
+  std::unique_ptr<as2_argus_capture::ArgusCapture> argus_;
+  uint64_t last_frame_number_{0};
+  bool have_frame_number_{false};
+  uint64_t frames_lost_{0};
+  std::vector<int64_t> argus_waits_ns_;
 
   as2_usb_camera_interface::MutexQueue<CameraFrame> output_queue_{1};
   sensor_msgs::msg::CameraInfo camera_info_;
@@ -161,6 +173,7 @@ private:
   void captureLoop();
   void processLoop();
   void processFrame(CameraFrame & camera_frame);
+  bool readArgus(cv::Mat & frame, int64_t & sensor_ns, std::string & error);
   void setRealtimePriority(int priority, const std::vector<pid_t> & camera_threads);
   void saveImages();
   void setSaveImages(

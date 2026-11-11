@@ -46,6 +46,19 @@ else()
   set(NOMINAL_REMAP_GPU_LIBRARIES "")
 endif()
 
+# The argus backend (frames stamped with their sensor time): with as2_argus_capture, which builds
+# its library only on a Jetson
+find_package(as2_argus_capture QUIET)
+if(TARGET as2_argus_capture::as2_argus_capture)
+  message(STATUS "argus backend: with as2_argus_capture")
+  set(ARGUS_CAPTURE AS2_USB_CAMERA_INTERFACE_ARGUS)
+  set(ARGUS_CAPTURE_LIBRARIES as2_argus_capture::as2_argus_capture)
+else()
+  message(STATUS "argus backend: no as2_argus_capture library, not built")
+  set(ARGUS_CAPTURE "")
+  set(ARGUS_CAPTURE_LIBRARIES "")
+endif()
+
 # include directories
 include_directories(
   include
@@ -72,8 +85,9 @@ target_include_directories(${PROJECT_NAME}_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(${PROJECT_NAME}_node yaml-cpp::yaml-cpp ${NOMINAL_REMAP_GPU_LIBRARIES})
-target_compile_definitions(${PROJECT_NAME}_node PRIVATE ${NOMINAL_REMAP_GPU})
+target_link_libraries(${PROJECT_NAME}_node yaml-cpp::yaml-cpp ${NOMINAL_REMAP_GPU_LIBRARIES}
+  ${ARGUS_CAPTURE_LIBRARIES})
+target_compile_definitions(${PROJECT_NAME}_node PRIVATE ${NOMINAL_REMAP_GPU} ${ARGUS_CAPTURE})
 
 # Create the library
 add_library(${PROJECT_NAME} STATIC ${SOURCE_CPP_FILES})
@@ -82,8 +96,9 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(${PROJECT_NAME} yaml-cpp::yaml-cpp ${NOMINAL_REMAP_GPU_LIBRARIES})
-target_compile_definitions(${PROJECT_NAME} PRIVATE ${NOMINAL_REMAP_GPU})
+target_link_libraries(${PROJECT_NAME} yaml-cpp::yaml-cpp ${NOMINAL_REMAP_GPU_LIBRARIES}
+  ${ARGUS_CAPTURE_LIBRARIES})
+target_compile_definitions(${PROJECT_NAME} PRIVATE ${NOMINAL_REMAP_GPU} ${ARGUS_CAPTURE})
 
 # Install the headers
 install(
@@ -118,6 +133,10 @@ ament_export_dependencies(${PROJECT_DEPENDENCIES})
 if(NOMINAL_REMAP_GPU_LIBRARIES)
   # The static library's users link NPP too
   ament_export_dependencies(CUDAToolkit)
+endif()
+if(ARGUS_CAPTURE_LIBRARIES)
+  # And as2_argus_capture
+  ament_export_dependencies(as2_argus_capture)
 endif()
 
 # Build tests if testing is enabled
