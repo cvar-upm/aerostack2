@@ -6,6 +6,7 @@
     framerate: 30.0 # Frame rate the camera is configured to capture at (fps)
     read_freq: 30.0 # Rate at which frames are read and published (Hz)
     timestamp_offset: 0.0 # Added to frame stamps (s); negative = earlier, e.g. kalibr's timeshift_cam_imu
+    realtime_priority: 0 # SCHED_FIFO priority (1-99) for the capture thread and the camera's own threads, 0 = off; needs an rtprio limit for the user (/etc/security/limits.d/)
     encoding: "bgr8" # Image encoding
     publish_images: true # Publish captured images on the camera topic
     output_queue_size: 1 # Internal frame queue size (drop-oldest; 1 = lowest latency)

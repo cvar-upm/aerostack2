@@ -36,12 +36,18 @@
 
 #include "as2_usb_camera_interface.hpp"
 
+#include <pthread.h>
+#include <sched.h>
+
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <cinttypes>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <set>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -51,6 +57,30 @@
 namespace usb_camera_interface
 {
 
+namespace
+{
+
+// Ids of this process's threads
+std::set<pid_t> processThreads()
+{
+  std::set<pid_t> threads;
+  std::error_code error;
+  for (const auto & entry : std::filesystem::directory_iterator("/proc/self/task", error)) {
+    threads.insert(static_cast<pid_t>(std::stoi(entry.path().filename().string())));
+  }
+  return threads;
+}
+
+std::string threadName(pid_t thread)
+{
+  std::ifstream file("/proc/self/task/" + std::to_string(thread) + "/comm");
+  std::string name;
+  std::getline(file, name);
+  return name;
+}
+
+}  // namespace
+
 UsbCameraInterface::UsbCameraInterface(as2::Node * node_ptr)
 : node_ptr_(node_ptr)
 {
@@ -59,7 +89,15 @@ UsbCameraInterface::UsbCameraInterface(as2::Node * node_ptr)
   // image / camera_info publishing.
   camera_ = std::make_shared<as2::sensors::Camera>(node_ptr_);
 
+  // The threads opening the camera starts (for the arducam, nvarguscamerasrc's and Argus's)
+  const std::set<pid_t> threads_before = processThreads();
   setupCamera();
+  std::vector<pid_t> camera_threads;
+  for (const pid_t thread : processThreads()) {
+    if (threads_before.count(thread) == 0) {
+      camera_threads.push_back(thread);
+    }
+  }
   cameraInfoSetup();
   setupNominalCamera();
 
@@ -123,6 +161,14 @@ UsbCameraInterface::UsbCameraInterface(as2::Node * node_ptr)
   }
   capture_thread_ = std::thread(&UsbCameraInterface::captureLoop, this);
   process_thread_ = std::thread(&UsbCameraInterface::processLoop, this);
+
+  // Under CPU load the camera's own threads wait for a core and the camera drops frames before
+  // they are read (drone 2: 98 of 120 frames/s read with the refiner and 4 busy cores, 117 with
+  // them at SCHED_FIFO 40)
+  const int realtime_priority = node_ptr_->getParameter<int>("realtime_priority", 0);
+  if (realtime_priority > 0) {
+    setRealtimePriority(realtime_priority, camera_threads);
+  }
 }
 
 UsbCameraInterface::~UsbCameraInterface()
@@ -392,6 +438,34 @@ void UsbCameraInterface::captureLoop()
       }
       replaced_since = now;
     }
+  }
+}
+
+void UsbCameraInterface::setRealtimePriority(
+  int priority, const std::vector<pid_t> & camera_threads)
+{
+  sched_param param{};
+  param.sched_priority = priority;
+  int error = pthread_setschedparam(capture_thread_.native_handle(), SCHED_FIFO, &param);
+  std::string raised = error == 0 ? "the capture thread" : "";
+  for (const pid_t thread : camera_threads) {
+    if (sched_setscheduler(thread, SCHED_FIFO, &param) == 0) {
+      raised += (raised.empty() ? "" : ", ") + threadName(thread);
+    } else if (errno != ESRCH) {  // ESRCH: the thread has ended
+      error = errno;
+    }
+  }
+  if (!raised.empty()) {
+    RCLCPP_INFO(
+      node_ptr_->get_logger(), "realtime_priority: SCHED_FIFO %d for %s", priority,
+      raised.c_str());
+  }
+  if (error != 0) {
+    RCLCPP_WARN(
+      node_ptr_->get_logger(),
+      "realtime_priority: SCHED_FIFO %d refused (%s): the user needs an rtprio limit, such as "
+      "\"<user> - rtprio 60\" in /etc/security/limits.d/, and a new login", priority,
+      std::strerror(error));
   }
 }
 

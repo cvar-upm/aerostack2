@@ -46,6 +46,8 @@
 
 #include <tf2/LinearMath/Quaternion.h>
 
+#include <sys/types.h>
+
 #include <cstring>
 #include <array>
 #include <atomic>
@@ -159,6 +161,7 @@ private:
   void captureLoop();
   void processLoop();
   void processFrame(CameraFrame & camera_frame);
+  void setRealtimePriority(int priority, const std::vector<pid_t> & camera_threads);
   void saveImages();
   void setSaveImages(
     const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
