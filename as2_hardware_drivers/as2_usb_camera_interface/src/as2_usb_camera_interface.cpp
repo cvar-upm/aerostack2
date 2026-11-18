@@ -262,15 +262,15 @@ void UsbCameraInterface::setupCamera()
     const int wbmode = node_ptr_->getParameter<int>("wbmode", 1);
     const int aeantibanding = node_ptr_->getParameter<int>("aeantibanding", 1);
     const double saturation = node_ptr_->getParameter<double>("saturation", 1.0);
+    const size_t number = device_port.find_last_not_of("0123456789") + 1;
+    const int sensor_id = number < device_port.size() ? std::stoi(device_port.substr(number)) : 0;
 
     // argus: read with Argus directly (as2_argus_capture), so each frame is stamped with its
     // sensor time: when it started coming out of the sensor, stamped by the capture hardware
     if (node_ptr_->getParameter<bool>("argus", false)) {
 #if defined(AS2_USB_CAMERA_INTERFACE_ARGUS)
       as2_argus_capture::Settings settings;
-      // "device" as nvarguscamerasrc's sensor-id: a number, or the one ending a path
-      const size_t number = device_port.find_last_not_of("0123456789") + 1;
-      settings.sensor_id = number < device_port.size() ? std::stoi(device_port.substr(number)) : 0;
+      settings.sensor_id = sensor_id;
       settings.width = image_width;
       settings.height = image_height;
       settings.framerate = framerate;
@@ -301,7 +301,7 @@ void UsbCameraInterface::setupCamera()
 #endif
     }
 
-    std::string source = "nvarguscamerasrc sensor-id=" + device_port;
+    std::string source = "nvarguscamerasrc sensor-id=" + std::to_string(sensor_id);
     if (exposure_recompensation != 0.0) {
       source += " exposurecompensation=" + std::to_string(exposure_recompensation);
     }
