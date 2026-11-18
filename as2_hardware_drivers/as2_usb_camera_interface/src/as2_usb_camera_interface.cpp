@@ -262,15 +262,17 @@ void UsbCameraInterface::setupCamera()
     const int wbmode = node_ptr_->getParameter<int>("wbmode", 1);
     const int aeantibanding = node_ptr_->getParameter<int>("aeantibanding", 1);
     const double saturation = node_ptr_->getParameter<double>("saturation", 1.0);
+    const size_t number = device_port.find_last_not_of("0123456789") + 1;
+    const int sensor_id = number < device_port.size() ? std::stoi(device_port.substr(number)) : 0;
 
     // argus: read with Argus directly (as2_argus_capture), so each frame is stamped with its
     // sensor time: when it started coming out of the sensor, stamped by the capture hardware
     if (node_ptr_->getParameter<bool>("argus", false)) {
+      // argus_fallback: when Argus does not open, read through GStreamer instead
+      const bool fallback = node_ptr_->getParameter<bool>("argus_fallback", true);
 #if defined(AS2_USB_CAMERA_INTERFACE_ARGUS)
       as2_argus_capture::Settings settings;
-      // "device" as nvarguscamerasrc's sensor-id: a number, or the one ending a path
-      const size_t number = device_port.find_last_not_of("0123456789") + 1;
-      settings.sensor_id = number < device_port.size() ? std::stoi(device_port.substr(number)) : 0;
+      settings.sensor_id = sensor_id;
       settings.width = image_width;
       settings.height = image_height;
       settings.framerate = framerate;
@@ -291,17 +293,30 @@ void UsbCameraInterface::setupCamera()
         RCLCPP_INFO(node_ptr_->get_logger(), "Camera capture setup complete");
         return;
       }
+      argus_.reset();
+      if (!fallback) {
+        RCLCPP_ERROR(
+          node_ptr_->get_logger(), "argus: %s. The camera is not opened (argus_fallback false)",
+          text.c_str());
+        return;
+      }
       RCLCPP_ERROR(
         node_ptr_->get_logger(), "argus: %s. Reading through GStreamer instead", text.c_str());
-      argus_.reset();
 #else
+      if (!fallback) {
+        RCLCPP_ERROR(
+          node_ptr_->get_logger(),
+          "argus: built without as2_argus_capture (Jetson only). The camera is not opened "
+          "(argus_fallback false)");
+        return;
+      }
       RCLCPP_ERROR(
         node_ptr_->get_logger(),
         "argus: built without as2_argus_capture (Jetson only). Reading through GStreamer instead");
 #endif
     }
 
-    std::string source = "nvarguscamerasrc sensor-id=" + device_port;
+    std::string source = "nvarguscamerasrc sensor-id=" + std::to_string(sensor_id);
     if (exposure_recompensation != 0.0) {
       source += " exposurecompensation=" + std::to_string(exposure_recompensation);
     }

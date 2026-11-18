@@ -153,7 +153,23 @@ struct NominalRemap::Gpu
     if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0) {
       throw std::runtime_error("no CUDA device");
     }
-    check(nppGetStreamContext(&context), "nppGetStreamContext");
+    // NPP context of the default stream on the current device
+    check(cudaGetDevice(&context.nCudaDeviceId), "cudaGetDevice");
+    cudaDeviceProp properties{};
+    check(cudaGetDeviceProperties(&properties, context.nCudaDeviceId), "cudaGetDeviceProperties");
+    context.nMultiProcessorCount = properties.multiProcessorCount;
+    context.nMaxThreadsPerMultiProcessor = properties.maxThreadsPerMultiProcessor;
+    context.nMaxThreadsPerBlock = properties.maxThreadsPerBlock;
+    context.nSharedMemPerBlock = properties.sharedMemPerBlock;
+    check(
+      cudaDeviceGetAttribute(
+        &context.nCudaDevAttrComputeCapabilityMajor, cudaDevAttrComputeCapabilityMajor,
+        context.nCudaDeviceId), "cudaDeviceGetAttribute");
+    check(
+      cudaDeviceGetAttribute(
+        &context.nCudaDevAttrComputeCapabilityMinor, cudaDevAttrComputeCapabilityMinor,
+        context.nCudaDeviceId), "cudaDeviceGetAttribute");
+    check(cudaStreamGetFlags(context.hStream, &context.nStreamFlags), "cudaStreamGetFlags");
     size = {host_map_x.cols, host_map_x.rows};
     map_x = nppiMalloc_32f_C1(size.width, size.height, &map_x_step);
     map_y = nppiMalloc_32f_C1(size.width, size.height, &map_y_step);
