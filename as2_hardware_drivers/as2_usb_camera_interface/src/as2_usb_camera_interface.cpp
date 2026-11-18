@@ -268,6 +268,8 @@ void UsbCameraInterface::setupCamera()
     // argus: read with Argus directly (as2_argus_capture), so each frame is stamped with its
     // sensor time: when it started coming out of the sensor, stamped by the capture hardware
     if (node_ptr_->getParameter<bool>("argus", false)) {
+      // argus_fallback: when Argus does not open, read through GStreamer instead
+      const bool fallback = node_ptr_->getParameter<bool>("argus_fallback", true);
 #if defined(AS2_USB_CAMERA_INTERFACE_ARGUS)
       as2_argus_capture::Settings settings;
       settings.sensor_id = sensor_id;
@@ -291,10 +293,23 @@ void UsbCameraInterface::setupCamera()
         RCLCPP_INFO(node_ptr_->get_logger(), "Camera capture setup complete");
         return;
       }
+      argus_.reset();
+      if (!fallback) {
+        RCLCPP_ERROR(
+          node_ptr_->get_logger(), "argus: %s. The camera is not opened (argus_fallback false)",
+          text.c_str());
+        return;
+      }
       RCLCPP_ERROR(
         node_ptr_->get_logger(), "argus: %s. Reading through GStreamer instead", text.c_str());
-      argus_.reset();
 #else
+      if (!fallback) {
+        RCLCPP_ERROR(
+          node_ptr_->get_logger(),
+          "argus: built without as2_argus_capture (Jetson only). The camera is not opened "
+          "(argus_fallback false)");
+        return;
+      }
       RCLCPP_ERROR(
         node_ptr_->get_logger(),
         "argus: built without as2_argus_capture (Jetson only). Reading through GStreamer instead");
